@@ -16,7 +16,7 @@ class XsNetworkParser extends Parser {
     }
 
     async getChapterUrls(dom, chapterUrlsUI) {
-        let bookUrl = dom.baseURI || "https://www.shuhaoxs.com/";
+        let bookUrl = util.isUrl(dom.baseURI) ? dom.baseURI : "https://www.shuhaoxs.com/";
         this.tocURL = bookUrl;
 
         let firstChapters = this.extractChaptersFromDom(dom);
@@ -30,21 +30,23 @@ class XsNetworkParser extends Parser {
         let cipherConfig = await this.getCipherConfig(dom, bookUrl);
 
         let chapters = [];
-        for (let page of pageNumbers) {
-            let pageChapters;
-            if (page === currentPage) {
-                pageChapters = firstChapters;
-            } else {
-                await this.waitBetweenRequests();
-                pageChapters = await this.fetchTocPage(bookUrl, articleId, page, cipherConfig);
+        try {
+            for (let page of pageNumbers) {
+                let pageChapters;
+                if (page === currentPage) {
+                    pageChapters = firstChapters;
+                } else {
+                    await this.waitBetweenRequests();
+                    pageChapters = await this.fetchTocPage(bookUrl, articleId, page, cipherConfig);
+                }
+                if (pageChapters.length > 0) {
+                    chapterUrlsUI?.showTocProgress(pageChapters);
+                    chapters.push(...pageChapters);
+                }
             }
-            if (pageChapters.length > 0) {
-                chapterUrlsUI?.showTocProgress(pageChapters);
-                chapters.push(...pageChapters);
-            }
+        } finally {
+            await this.setNavigationHeaders(bookUrl);
         }
-
-        await this.setNavigationHeaders(bookUrl);
         return chapters;
     }
 
@@ -68,7 +70,7 @@ class XsNetworkParser extends Parser {
             }
         }
         try {
-            let pathMatch = new URL(dom.baseURI).pathname.match(/\/book\/([^/-]+)\.html/i);
+            let pathMatch = new URL(dom.baseURI).pathname.match(/\/book\/([^/-]+)(?:-\d+)?\.html/i);
             if (pathMatch) {
                 return pathMatch[1];
             }
@@ -80,27 +82,19 @@ class XsNetworkParser extends Parser {
 
     getCurrentTocPage(dom) {
         let curLi = dom.querySelector(".pageS .dropDown li.cur[data-p]");
-        if (curLi != null) {
-            return parseInt(curLi.getAttribute("data-p"), 10);
-        }
-        let selectedOpt = dom.querySelector(".page2 .chapter_page select option[selected]")
-        || dom.querySelector(".page2 .chapter_page select option");
-        if (selectedOpt != null) {
-            return parseInt(selectedOpt.value || selectedOpt.getAttribute("value"), 10);
-        }
-        return 1;
+        let raw = curLi?.getAttribute("data-p")
+        || dom.querySelector(".page2 .chapter_page select option[selected]")?.getAttribute("value")
+        || dom.querySelector(".page2 .chapter_page select option")?.getAttribute("value");
+        let parsed = parseInt(raw, 10);
+        return isNaN(parsed) ? 1 : parsed;
     }
 
     extractTocPageNumbers(dom) {
         let items = [...dom.querySelectorAll(".pageS .dropDown li[data-p]")];
-        let pages;
-        if (items.length > 0) {
-            pages = items.map(li => parseInt(li.getAttribute("data-p"), 10));
-        } else {
-            let options = [...dom.querySelectorAll(".page2 .chapter_page select option")];
-            pages = options.map(opt => parseInt(opt.value || opt.getAttribute("value"), 10));
-        }
-        return [...new Set(pages.filter(n => !isNaN(n) && (n > 0)))];
+        let pages = items.length > 0
+        ? items.map(li => parseInt(li.getAttribute("data-p"), 10))
+        : [...dom.querySelectorAll(".page2 .chapter_page select option")].map(opt => parseInt(opt.value || opt.getAttribute("value"), 10));
+        return [...new Set(pages.filter(n => !isNaN(n) && (n > 0)))].sort((a, b) => a - b);
     }
 
     extractChaptersFromDom(dom) {
@@ -112,21 +106,19 @@ class XsNetworkParser extends Parser {
         return chapters;
     }
 
-    findCipherScriptUrl(dom, baseUrl) {
+    findCipherScriptUrls(dom, baseUrl) {
         let knownStatic = new Set([
             "layer.js", "crypto-js.min.js", "public.js", "common.js", "content.js", "swiper.min.js"
         ]);
+        let urls = [];
         for (let script of dom.querySelectorAll("script[src*='/templates/js/'], script[src*='/template/js/']")) {
             let src = script.getAttribute("src") || "";
             let file = src.split("/").pop().split("?")[0].toLowerCase();
-            if (!file.endsWith(".js")) {
-                continue;
-            }
-            if (!knownStatic.has(file) && !file.startsWith("jquery")) {
-                return new URL(src, baseUrl).href;
+            if (file.endsWith(".js") && !knownStatic.has(file) && !file.startsWith("jquery")) {
+                urls.push(util.resolveRelativeUrl(baseUrl, src));
             }
         }
-        return null;
+        return urls;
     }
 
     makeWrapOptions(fetchOptions) {
@@ -145,23 +137,27 @@ class XsNetworkParser extends Parser {
             secretKey: XsNetworkParser.DEFAULT_AES_KEY,
             iv: XsNetworkParser.DEFAULT_AES_IV
         };
-        let scriptUrl = this.findCipherScriptUrl(dom, bookUrl);
-        if (scriptUrl == null) {
-            return fallback;
-        }
-
-        await this.waitBetweenRequests();
-        await this.setNavigationHeaders(bookUrl);
-        let response = await HttpClient.wrapFetch(scriptUrl, this.makeWrapOptions());
-        if (!this.isHtmlContentType(response) && (response.arrayBuffer != null)) {
-            let scriptText = this.decodeResponseBytes(response.arrayBuffer);
-            let keyMatch = scriptText.match(/new\s+AESCrypt\s*\(\s*["']([^"']+)["']\s*\)/);
-            let ivMatch = scriptText.match(/this\.iv\s*=\s*CryptoJS\.enc\.Utf8\.parse\s*\(\s*["']([^"']+)["']\s*\)/);
-            if (keyMatch && ivMatch) {
-                return {
-                    secretKey: keyMatch[1],
-                    iv: ivMatch[1]
-                };
+        for (let scriptUrl of this.findCipherScriptUrls(dom, bookUrl)) {
+            try {
+                await this.waitBetweenRequests();
+                await this.setRequestHeaders(bookUrl, [
+                    { header: "referer", operation: "set", value: bookUrl },
+                    { header: "sec-fetch-dest", operation: "set", value: "script" },
+                    { header: "sec-fetch-mode", operation: "set", value: "no-cors" },
+                    { header: "sec-fetch-site", operation: "set", value: "same-origin" },
+                    { header: "origin", operation: "remove" }
+                ]);
+                let response = await HttpClient.wrapFetch(scriptUrl, { errorHandler: new XsNetworkErrorHandler(this) });
+                if (!this.isHtmlContentType(response) && (response.arrayBuffer != null)) {
+                    let scriptText = this.decodeResponseBytes(response.arrayBuffer);
+                    let keyMatch = scriptText.match(/new\s+AESCrypt\s*\(\s*["']([^"']+)["']\s*\)/);
+                    let ivMatch = scriptText.match(/this\.iv\s*=\s*CryptoJS\.enc\.Utf8\.parse\s*\(\s*["']([^"']+)["']\s*\)/);
+                    if (keyMatch && ivMatch) {
+                        return { secretKey: keyMatch[1], iv: ivMatch[1] };
+                    }
+                }
+            } catch {
+                // Try next script or fall back to defaults
             }
         }
         return fallback;
@@ -212,13 +208,9 @@ class XsNetworkParser extends Parser {
             body: body
         }));
 
-        let json;
-        if (!this.isHtmlContentType(response) && (response.arrayBuffer != null)) {
-            json = JSON.parse(this.decodeResponseBytes(response.arrayBuffer));
-        } else if (response.responseXML != null) {
-            json = JSON.parse(response.responseXML.body.textContent.trim());
-        } else {
-            throw new Error("Unexpected empty response from shuhaoxs.com TOC API.");
+        let json = this.tryParseTocJson(response);
+        if (json == null) {
+            throw new Error("Unexpected empty response from TOC API.");
         }
         return this.extractChaptersFromJson(json, bookUrl);
     }
@@ -229,7 +221,7 @@ class XsNetworkParser extends Parser {
 
     extractChaptersFromJson(json, baseUrl) {
         if ((json == null) || (json.code == null) || (Number(json.code) !== 0) || !Array.isArray(json.data)) {
-            throw new Error(json?.msg || "Failed to load shuhaoxs.com chapter list page.");
+            throw new Error(json?.msg || "Failed to load chapter list page.");
         }
         return json.data
         .filter(item => item && item.chapterurl)
@@ -241,98 +233,51 @@ class XsNetworkParser extends Parser {
     }
 
     makeUrlFilter(url) {
-        let host = new URL(url).hostname.replace(/^www\./i, "");
+        let parsed = new URL(url);
+        if (!parsed.protocol.startsWith("http")) {
+            return null;
+        }
+        let host = parsed.hostname.replace(/^www\./i, "");
         return "||" + host + "/";
     }
 
-    async setNavigationHeaders(refererUrl) {
-        let rules = [
-            {
-                id: 1,
-                priority: 1,
-                action: {
-                    type: "modifyHeaders",
-                    requestHeaders: [
-                        {
-                            header: "referer",
-                            operation: "set",
-                            value: refererUrl
-                        },
-                        {
-                            header: "sec-fetch-dest",
-                            operation: "set",
-                            value: "document"
-                        },
-                        {
-                            header: "sec-fetch-mode",
-                            operation: "set",
-                            value: "navigate"
-                        },
-                        {
-                            header: "sec-fetch-site",
-                            operation: "set",
-                            value: "same-origin"
-                        },
-                        {
-                            header: "origin",
-                            operation: "remove"
-                        }
-                    ]
-                },
-                condition: {
-                    urlFilter: this.makeUrlFilter(refererUrl),
-                    resourceTypes: ["xmlhttprequest"]
-                }
+    async setRequestHeaders(refererUrl, requestHeaders) {
+        let urlFilter = this.makeUrlFilter(refererUrl);
+        if (urlFilter == null) {
+            return;
+        }
+        await HttpClient.setDeclarativeNetRequestRules([{
+            id: 1,
+            priority: 1,
+            action: {
+                type: "modifyHeaders",
+                requestHeaders: requestHeaders
+            },
+            condition: {
+                urlFilter: urlFilter,
+                resourceTypes: ["xmlhttprequest"]
             }
-        ];
+        }]);
+    }
 
-        await HttpClient.setDeclarativeNetRequestRules(rules);
+    async setNavigationHeaders(refererUrl) {
+        await this.setRequestHeaders(refererUrl, [
+            { header: "referer", operation: "set", value: refererUrl },
+            { header: "sec-fetch-dest", operation: "set", value: "document" },
+            { header: "sec-fetch-mode", operation: "set", value: "navigate" },
+            { header: "sec-fetch-site", operation: "set", value: "same-origin" },
+            { header: "origin", operation: "remove" }
+        ]);
     }
 
     async setAjaxHeaders(refererUrl) {
-        let origin = new URL(refererUrl).origin;
-        let rules = [
-            {
-                id: 1,
-                priority: 1,
-                action: {
-                    type: "modifyHeaders",
-                    requestHeaders: [
-                        {
-                            header: "referer",
-                            operation: "set",
-                            value: refererUrl
-                        },
-                        {
-                            header: "origin",
-                            operation: "set",
-                            value: origin
-                        },
-                        {
-                            header: "sec-fetch-dest",
-                            operation: "set",
-                            value: "empty"
-                        },
-                        {
-                            header: "sec-fetch-mode",
-                            operation: "set",
-                            value: "cors"
-                        },
-                        {
-                            header: "sec-fetch-site",
-                            operation: "set",
-                            value: "same-origin"
-                        }
-                    ]
-                },
-                condition: {
-                    urlFilter: this.makeUrlFilter(refererUrl),
-                    resourceTypes: ["xmlhttprequest"]
-                }
-            }
-        ];
-
-        await HttpClient.setDeclarativeNetRequestRules(rules);
+        await this.setRequestHeaders(refererUrl, [
+            { header: "referer", operation: "set", value: refererUrl },
+            { header: "origin", operation: "set", value: new URL(refererUrl).origin },
+                                     { header: "sec-fetch-dest", operation: "set", value: "empty" },
+                                     { header: "sec-fetch-mode", operation: "set", value: "cors" },
+                                     { header: "sec-fetch-site", operation: "set", value: "same-origin" }
+        ]);
     }
 
     async fetchChapter(url) {
@@ -343,7 +288,7 @@ class XsNetworkParser extends Parser {
         if (mainContent == null) {
             return dom;
         }
-        this.cleanContentElement(mainContent);
+        this.preparePageContent(mainContent);
 
         let visited = new Set([util.normalizeUrlForCompare(url)]);
         let currentReferer = url;
@@ -357,7 +302,7 @@ class XsNetworkParser extends Parser {
             if (nextContent == null) {
                 break;
             }
-            this.cleanContentElement(nextContent);
+            this.preparePageContent(nextContent);
             this.removeOverlappingLeadingElements(mainContent, nextContent);
             util.moveChildElements(nextContent, mainContent);
             currentReferer = nextPageUrl;
@@ -385,6 +330,11 @@ class XsNetworkParser extends Parser {
     findNextChapterPageUrl(dom, currentUrl) {
         let links = [...dom.querySelectorAll(".conBox .btnW a[href]")];
         let currentParsed = this.parseChapterPageUrl(currentUrl);
+        let knownChapters = new Set(
+            [...this.getPagesToFetch().keys()].map(u => util.normalizeUrlForCompare(u))
+        );
+        let normalizedToc = this.tocURL ? util.normalizeUrlForCompare(this.tocURL) : null;
+
         for (let link of links) {
             let rawHref = link.getAttribute("href")?.trim();
             if (!rawHref || rawHref.startsWith("#") || rawHref.toLowerCase().startsWith("javascript:")) {
@@ -392,7 +342,7 @@ class XsNetworkParser extends Parser {
             }
             let resolvedUrl;
             try {
-                resolvedUrl = new URL(rawHref, currentUrl).href;
+                resolvedUrl = util.resolveRelativeUrl(currentUrl, rawHref);
             } catch {
                 continue;
             }
@@ -400,17 +350,28 @@ class XsNetworkParser extends Parser {
                 continue;
             }
             let nextParsed = this.parseChapterPageUrl(resolvedUrl);
-            if (currentParsed && nextParsed
-                && (currentParsed.bookId === nextParsed.bookId)
-                && (currentParsed.chapterId === nextParsed.chapterId)
-                && (nextParsed.page > currentParsed.page)) {
-                return resolvedUrl;
-                }
-                if (/^下一页(?:\s*[»›>]+)?$/.test(link.textContent.trim())) {
+            if (currentParsed && nextParsed) {
+                if ((currentParsed.bookId === nextParsed.bookId)
+                    && (currentParsed.chapterId === nextParsed.chapterId)
+                    && (nextParsed.page > currentParsed.page)) {
                     return resolvedUrl;
-                }
+                    }
+                    continue;
+            }
+            let normalizedResolved = util.normalizeUrlForCompare(resolvedUrl);
+            if (knownChapters.has(normalizedResolved) || (normalizedResolved === normalizedToc)) {
+                continue;
+            }
+            if (/^下一页(?:\s*[»›>]+)?$/.test(link.textContent.trim())) {
+                return resolvedUrl;
+            }
         }
         return null;
+    }
+
+    preparePageContent(element) {
+        util.removeChildElementsMatchingSelector(element, "script, .rrAd, #adPcSlot, .btnErrorW, .btnW");
+        this.cleanContentElement(element);
     }
 
     cleanContentElement(content) {
@@ -418,44 +379,43 @@ class XsNetworkParser extends Parser {
             return;
         }
         let doc = content.ownerDocument;
-        let skipStructuralPurification = this.hasComplexContentElements(content);
+        this.cleanInlineTextNodes(content);
+        [...content.querySelectorAll("a")].filter(a => util.isElementWhiteSpace(a)).forEach(a => a.remove());
 
-        if (!skipStructuralPurification && this.hasTopLevelBrNodes(content)) {
-            let rebuiltNodes = this.splitBrContainerIntoParagraphs(doc, [...content.childNodes]);
-            content.replaceChildren(...rebuiltNodes);
+        let skipPreformatted = content.querySelector("pre, code") != null;
+        if (!skipPreformatted && [...content.children].some(el => el.tagName.toLowerCase() === "br")) {
+            content.replaceChildren(...this.splitBrContainerIntoParagraphs(doc, [...content.childNodes]));
         }
 
         for (let node of [...content.childNodes]) {
             if (node.nodeType === Node.TEXT_NODE) {
-                let cleaned = this.stripJunkPromoLines(node.nodeValue);
-                if (util.isStringWhiteSpace(cleaned)) {
+                if (util.isStringWhiteSpace(node.nodeValue)) {
                     node.remove();
                 } else {
-                    node.nodeValue = cleaned;
                     let wrapped = util.wrapRawTextNode(node);
-                    if (!skipStructuralPurification && (wrapped.tagName === "P")) {
+                    if (!skipPreformatted) {
                         this.trimParagraphEdges(wrapped);
                     }
                     node.replaceWith(wrapped);
                 }
             } else if (node.nodeType === Node.ELEMENT_NODE) {
                 let tag = node.tagName.toLowerCase();
-                if ((tag === "p") && !skipStructuralPurification && this.isBrSeparatedParagraph(node)) {
-                    let splitParagraphs = this.splitBrContainerIntoParagraphs(doc, [...node.childNodes]);
-                    node.replaceWith(...splitParagraphs);
-                } else if ((tag === "p") || (tag === "div") || (tag === "span")) {
-                    this.cleanInlineTextNodes(node);
-                    if ((tag === "p") && !skipStructuralPurification && !this.hasComplexContentElements(node)) {
+                if ((tag === "p") && !skipPreformatted && this.isBrSeparatedParagraph(node)) {
+                    node.replaceWith(...this.splitBrContainerIntoParagraphs(doc, [...node.childNodes]));
+                } else if (tag === "p") {
+                    if (!skipPreformatted && (node.querySelector("pre, code") == null)) {
                         this.trimParagraphEdges(node);
                     }
                     if (util.isElementWhiteSpace(node)) {
                         node.remove();
                     }
+                } else if (((tag === "div") || (tag === "span")) && util.isElementWhiteSpace(node)) {
+                    node.remove();
                 }
             }
         }
 
-        if (!skipStructuralPurification && [...content.children].some(el => el.tagName === "P")) {
+        if (!skipPreformatted && [...content.children].some(el => el.tagName === "P")) {
             this.formatBlockSpacing(content);
         }
     }
@@ -477,19 +437,9 @@ class XsNetworkParser extends Parser {
         }
     }
 
-    hasComplexContentElements(element) {
-        return element.querySelector("table, ul, ol, pre, code, img, svg, figure") != null;
-    }
-
-    hasTopLevelBrNodes(content) {
-        return [...content.children].some(el => el.tagName.toLowerCase() === "br");
-    }
-
     isBrSeparatedParagraph(p) {
-        if (p.querySelector("p, div, table, ul, ol, pre, code, img, svg, figure") != null) {
-            return false;
-        }
-        return p.querySelectorAll("br").length >= 2;
+        return (p.querySelector("p, div, table, ul, ol, pre, code") == null)
+        && (p.querySelectorAll("br").length >= 2);
     }
 
     splitBrContainerIntoParagraphs(doc, nodes) {
@@ -506,9 +456,11 @@ class XsNetworkParser extends Parser {
             if (bucket.length === 0) {
                 return;
             }
-            let p = this.buildParagraphFromNodes(doc, bucket);
+            let p = doc.createElement("p");
+            bucket.forEach(n => p.appendChild(n));
             bucket = [];
-            if (p != null) {
+            this.trimParagraphEdges(p);
+            if (!util.isElementWhiteSpace(p)) {
                 result.push(p);
             }
         };
@@ -524,14 +476,11 @@ class XsNetworkParser extends Parser {
                     flushBucket();
                     if ((tag === "p") && this.isBrSeparatedParagraph(node)) {
                         result.push(...this.splitBrContainerIntoParagraphs(doc, [...node.childNodes]));
-                    } else {
-                        this.cleanInlineTextNodes(node);
+                    } else if (!util.isElementWhiteSpace(node)) {
                         if (tag === "p") {
                             this.trimParagraphEdges(node);
                         }
-                        if (!util.isElementWhiteSpace(node)) {
-                            result.push(node);
-                        }
+                        result.push(node);
                     }
                     continue;
                 }
@@ -542,53 +491,25 @@ class XsNetworkParser extends Parser {
         return result;
     }
 
-    buildParagraphFromNodes(doc, nodes) {
-        let p = doc.createElement("p");
-        for (let node of nodes) {
-            p.appendChild(node);
-        }
-        this.cleanInlineTextNodes(p);
-        this.trimParagraphEdges(p);
-        if (util.isElementWhiteSpace(p)) {
-            return null;
-        }
-        return p;
-    }
-
     trimParagraphEdges(p) {
         let walker = p.ownerDocument.createTreeWalker(p, NodeFilter.SHOW_TEXT);
         let textNodes = [];
-        let current = walker.nextNode();
-        while (current != null) {
-            textNodes.push(current);
-            current = walker.nextNode();
+        for (let cur = walker.nextNode(); cur != null; cur = walker.nextNode()) {
+            textNodes.push(cur);
         }
-        if (textNodes.length === 0) {
-            return;
-        }
-
-        let firstHasLeading = /^[ \t\r\n\u3000]+/.test(textNodes[0].nodeValue);
-        let lastHasTrailing = /[ \t\r\n\u3000]+$/.test(textNodes[textNodes.length - 1].nodeValue);
-        if (!firstHasLeading && !lastHasTrailing) {
-            return;
-        }
-
         for (let i = 0; i < textNodes.length; i++) {
-            let trimmed = textNodes[i].nodeValue.replace(/^[ \t\r\n\u3000]+/, "");
-            textNodes[i].nodeValue = trimmed;
-            if (trimmed !== "") {
+            textNodes[i].nodeValue = textNodes[i].nodeValue.replace(/^[ \t\r\n\u3000]+/, "");
+            if (textNodes[i].nodeValue !== "") {
                 break;
             }
             textNodes[i].remove();
         }
-
         for (let i = textNodes.length - 1; i >= 0; i--) {
             if (!textNodes[i].isConnected) {
                 continue;
             }
-            let trimmed = textNodes[i].nodeValue.replace(/[ \t\r\n\u3000]+$/, "");
-            textNodes[i].nodeValue = trimmed;
-            if (trimmed !== "") {
+            textNodes[i].nodeValue = textNodes[i].nodeValue.replace(/[ \t\r\n\u3000]+$/, "");
+            if (textNodes[i].nodeValue !== "") {
                 break;
             }
             textNodes[i].remove();
@@ -627,10 +548,8 @@ class XsNetworkParser extends Parser {
     cleanInlineTextNodes(element) {
         let walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
         let textNodes = [];
-        let current = walker.nextNode();
-        while (current != null) {
-            textNodes.push(current);
-            current = walker.nextNode();
+        for (let cur = walker.nextNode(); cur != null; cur = walker.nextNode()) {
+            textNodes.push(cur);
         }
         for (let textNode of textNodes) {
             let cleaned = this.stripJunkPromoLines(textNode.nodeValue);
@@ -660,16 +579,13 @@ class XsNetworkParser extends Parser {
         if (!trimmed) {
             return false;
         }
-        if (/(?:shuhaoxs|nnshushe|zhongxiaxs|yangmiaoxs|heiyaxs|nianxiaxs|klxs123)\.com/i.test(trimmed)) {
-            return true;
-        }
         if (/^(?:[\s【\[（(]*(?:https?:\/\/)?(?:[a-z0-9-]+\.)+(?:com|net|org|cn|cc|tw|la|me|io|info|xyz|top|vip|club|co|icu|site|ink|wang|pw|tv|bz|in|pro|online|fun|ren|cx|sx|mobi|app|live|one|moe|asia|biz|shop|store|work|cloud|tech|win|ltd)(?:\/[^\s]*)?[\s】\]）)。，,!！?？,;；]*)+$/i.test(trimmed)) {
             return true;
         }
-        if (/(?:https?:\/\/|www\.)[a-z0-9-]+(?:\.[a-z0-9-]+)+/i.test(trimmed)) {
+        if (/(?:shuhaoxs|nnshushe|zhongxiaxs|yangmiaoxs|heiyaxs|nianxiaxs|klxs123)\.com/i.test(trimmed)) {
             return true;
         }
-        if (/(?:域名|网址|首发|书库|安利|直达精彩|书豪小说网|本章未完|下一页继续阅读).*[a-z0-9-]+\.(?:com|net|org|cn|cc|tw|la|xyz|top|vip|club|co|icu|site|ink)/i.test(trimmed)) {
+        if (/(?:域名|网址|首发|书库|安利|直达精彩|书豪小说网|黑崖小说网|本章未完|下一页继续阅读).*(?:https?:\/\/|www\.|[a-z0-9-]+\.(?:com|net|org|cn|cc|tw|la|xyz|top|vip|club|co|icu|site|ink))/i.test(trimmed)) {
             return true;
         }
         return false;
@@ -718,12 +634,35 @@ class XsNetworkParser extends Parser {
         return false;
     }
 
-    isNoContentToError403AndContentNull(response) {
-        if (!this.isHtmlContentType(response) || (response?.responseXML == null)
-            || (this.tryParseTocJson(response) != null) || this.isJsResponse(response)) {
+    isChallengePage(dom) {
+        if (dom == null) {
+            return false;
+        }
+        if ((this.findContent(dom) != null)
+            || (dom.querySelector(".chapListBody, .direList.chapter_list, .bookDetail") != null)) {
             return false;
             }
-            return super.isNoContentToError403AndContentNull(response);
+            if (dom.querySelector("#challenge-form, #cf-challenge-running, .cf-browser-verification, script[src*='/cdn-cgi/challenge-platform/'], #anubis_version, .cf-turnstile, .g-recaptcha, .h-captcha, .geetest_holder") != null) {
+                return true;
+            }
+            if (dom.querySelector("img[src*='captcha'], input[name*='captcha'], input[placeholder*='验证码']") != null) {
+                return true;
+            }
+            let text = dom.documentElement?.textContent || "";
+        return /_cf_chl_opt|Just a moment\.\.\.|人机验证|安全验证|请完成验证|滑动验证|输入验证码/i.test(text);
+    }
+
+    isNoContentToError403AndContentNull(response) {
+        if (!this.userPreferences?.noContentToError403?.value
+            || !this.isHtmlContentType(response)
+            || (response?.responseXML == null)
+            || (this.tryParseTocJson(response) != null)
+            || this.isJsResponse(response)
+            || this.isTocApiUrl(response.response?.url)) {
+            return false;
+            }
+            return (this.findContent(response.responseXML) == null)
+            && (response.responseXML.querySelector(".chapListBody, .direList.chapter_list") == null);
     }
 
     isCustomError(response) {
@@ -739,9 +678,7 @@ class XsNetworkParser extends Parser {
             || !Array.isArray(parsed.data);
         }
         if (this.isHtmlContentType(response) && (response.responseXML != null)) {
-            let hasChapterContent = this.findContent(response.responseXML) != null;
-            let hasToc = response.responseXML.querySelector(".chapListBody, .direList.chapter_list") != null;
-            return !hasChapterContent && !hasToc;
+            return this.isChallengePage(response.responseXML);
         }
         return false;
     }
@@ -749,17 +686,17 @@ class XsNetworkParser extends Parser {
     setCustomErrorResponse(url, wrapOptions, checkedresponse) {
         let responseUrl = checkedresponse?.response?.url || url;
         let isApiEndpoint = this.isTocApiUrl(url) || this.isTocApiUrl(responseUrl);
-        if (isApiEndpoint && !this.isHtmlContentType(checkedresponse)) {
-            let parsed = this.tryParseTocJson(checkedresponse);
+        let parsed = this.tryParseTocJson(checkedresponse);
+        if (isApiEndpoint && ((parsed != null) || !this.isHtmlContentType(checkedresponse))) {
             return {
                 url: url,
                 wrapOptions: wrapOptions,
                 response: {
                     url: responseUrl,
-                    status: 503,
-                    retryDelay: [15, 10, 5]
+                    status: 999,
+                    retryDelay: [10, 5]
                 },
-                errorMessage: parsed?.msg || "Failed to load shuhaoxs.com chapter list page."
+                errorMessage: parsed?.msg || "Failed to load chapter list page."
             };
         }
         if ((isApiEndpoint || responseUrl.endsWith(".js")) && this.tocURL) {
@@ -780,17 +717,17 @@ class XsNetworkParser extends Parser {
     }
 
     extractTitleImpl(dom) {
-        let raw = dom.querySelector(".bookDetail .txtb .name a, .bookDetail .txtb .name h1")?.textContent
-        || dom.querySelector("meta[property='og:novel:book_name']")?.getAttribute("content")
-        || dom.querySelector("meta[property='og:title']")?.getAttribute("content");
-        return (raw != null) ? this.cleanTitle(raw) : null;
+        let raw = dom.querySelector(".bookDetail .txtb .name a, .bookDetail .txtb .name h1")?.textContent?.trim()
+        || dom.querySelector("meta[property='og:novel:book_name']")?.getAttribute("content")?.trim()
+        || dom.querySelector("meta[property='og:title']")?.getAttribute("content")?.trim();
+        return raw ? this.cleanTitle(raw) : null;
     }
 
     extractAuthor(dom) {
-        let author = dom.querySelector(".bookDetail .info dd a")?.textContent
-        || dom.querySelector(".bookDetail .infoM dd")?.textContent
-        || dom.querySelector("meta[property='og:novel:author']")?.getAttribute("content");
-        return author ? author.trim() : super.extractAuthor(dom);
+        let author = dom.querySelector(".bookDetail .info dd a")?.textContent?.trim()
+        || dom.querySelector(".bookDetail .infoM dd")?.textContent?.trim()
+        || dom.querySelector("meta[property='og:novel:author']")?.getAttribute("content")?.trim();
+        return author || super.extractAuthor(dom);
     }
 
     extractLanguage() {
@@ -838,7 +775,7 @@ class XsNetworkParser extends Parser {
 
     addTitleToContent(webPage, content) {
         super.addTitleToContent(webPage, content);
-        if ((content == null) || this.hasComplexContentElements(content)) {
+        if ((content == null) || (content.querySelector("pre, code") != null)) {
             return;
         }
         let first = content.firstElementChild;
@@ -850,14 +787,19 @@ class XsNetworkParser extends Parser {
     }
 
     findCoverImageUrl(dom) {
-        return util.getFirstImgSrc(dom, ".bookDetail .picb .pic")
-        || dom.querySelector("meta[property='og:image']")?.getAttribute("content")
-        || null;
+        let img = util.getFirstImgSrc(dom, ".bookDetail .picb .pic");
+        if (img != null) {
+            return img;
+        }
+        let metaImg = dom.querySelector("meta[property='og:image']")?.getAttribute("content")?.trim();
+        if (!metaImg) {
+            return null;
+        }
+        return dom.baseURI ? util.resolveRelativeUrl(dom.baseURI, metaImg) : metaImg;
     }
 
     removeUnwantedElementsFromContentElement(element) {
-        util.removeChildElementsMatchingSelector(element, ".rrAd, #adPcSlot, .btnErrorW, .btnW");
-        this.cleanContentElement(element);
+        this.preparePageContent(element);
         super.removeUnwantedElementsFromContentElement(element);
     }
 
@@ -987,6 +929,9 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
 
     onFetchError(url, error) {
         let hostname = new URL(url).hostname;
+        if (this.wrapOptions?.skipFetchRetry) {
+            return Promise.reject(error);
+        }
         if (HttpClient.blockedSites.has(hostname)
             || BlockedHostNames.has(hostname)
             || util.getSleepController().signal.aborted
@@ -1014,11 +959,13 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         : new Error(this.makeFailMessage(response.url, response.status));
 
         if (util.getSleepController().signal.aborted) {
+            wrapOptions.skipFetchRetry = true;
             return Promise.reject(failError);
         }
 
         let retry = this.getRetryBehaviour(response);
         if (retry.retryDelay.length === 0) {
+            wrapOptions.skipFetchRetry = true;
             return Promise.reject(failError);
         }
 
@@ -1037,8 +984,13 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
                     url: this.getOpenUrl(response.url || url),
                     status: response.status
                 };
-                return this.promptUserForRetry(url, wrapOptions, effectiveResponse, failError);
+                return this.promptUserForRetry(url, wrapOptions, effectiveResponse, failError)
+                .catch(err => {
+                    wrapOptions.skipFetchRetry = true;
+                    throw err;
+                });
             }
+            wrapOptions.skipFetchRetry = true;
             return Promise.reject(failError);
     }
 
@@ -1048,6 +1000,9 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
                 retryDelay: [...response.retryDelay],
                 promptUser: true
             };
+        }
+        if ((response.status === 400) || (response.status === 404) || (response.status === 410)) {
+            return { retryDelay: [], promptUser: false };
         }
         let retry = FetchErrorHandler.getAutomaticRetryBehaviourForStatus(response);
         if (retry.retryDelay.length === 0) {
@@ -1067,8 +1022,10 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         let delayBeforeRetry = retryState.retryDelay.pop() * 1000;
         await util.sleep(delayBeforeRetry);
         if (util.getSleepController().signal.aborted) {
+            wrapOptions.skipFetchRetry = true;
             throw new Error(this.makeFailMessage(url, "Aborted"));
         }
+        wrapOptions.skipFetchRetry = false;
         return HttpClient.wrapFetchImpl(url, wrapOptions);
     }
 
@@ -1076,8 +1033,15 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         let cancelLabel = this.getCancelButtonText();
         return new Promise((resolve, reject) => {
             msg.openurl = this.getOpenUrl(url);
-            msg.retryAction = () => resolve(HttpClient.wrapFetchImpl(url, wrapOptions));
-            msg.cancelAction = () => reject(failError);
+            msg.blockurl = url;
+            msg.retryAction = () => {
+                wrapOptions.skipFetchRetry = false;
+                resolve(HttpClient.wrapFetchImpl(url, wrapOptions));
+            };
+            msg.cancelAction = () => {
+                wrapOptions.skipFetchRetry = true;
+                reject(failError);
+            };
             msg.cancelLabel = cancelLabel;
             ErrorLog.showErrorMessage(msg);
         });
