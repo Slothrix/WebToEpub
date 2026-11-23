@@ -92,8 +92,8 @@ class XsNetworkParser extends Parser {
     extractTocPageNumbers(dom) {
         let items = [...dom.querySelectorAll(".pageS .dropDown li[data-p]")];
         let pages = items.length > 0
-        ? items.map(li => parseInt(li.getAttribute("data-p"), 10))
-        : [...dom.querySelectorAll(".page2 .chapter_page select option")].map(opt => parseInt(opt.value || opt.getAttribute("value"), 10));
+            ? items.map(li => parseInt(li.getAttribute("data-p"), 10))
+            : [...dom.querySelectorAll(".page2 .chapter_page select option")].map(opt => parseInt(opt.value || opt.getAttribute("value"), 10));
         return [...new Set(pages.filter(n => !isNaN(n) && (n > 0)))].sort((a, b) => a - b);
     }
 
@@ -224,12 +224,12 @@ class XsNetworkParser extends Parser {
             throw new Error(json?.msg || "Failed to load chapter list page.");
         }
         return json.data
-        .filter(item => item && item.chapterurl)
-        .map(item => ({
-            sourceUrl: new URL(item.chapterurl, baseUrl).href,
-                      title: this.cleanTitle(item.chaptername || ""),
-                      newArc: null
-        }));
+            .filter(item => item && item.chapterurl)
+            .map(item => ({
+                sourceUrl: new URL(item.chapterurl, baseUrl).href,
+                title: this.cleanTitle(item.chaptername || ""),
+                newArc: null
+            }));
     }
 
     makeUrlFilter(url) {
@@ -274,9 +274,9 @@ class XsNetworkParser extends Parser {
         await this.setRequestHeaders(refererUrl, [
             { header: "referer", operation: "set", value: refererUrl },
             { header: "origin", operation: "set", value: new URL(refererUrl).origin },
-                                     { header: "sec-fetch-dest", operation: "set", value: "empty" },
-                                     { header: "sec-fetch-mode", operation: "set", value: "cors" },
-                                     { header: "sec-fetch-site", operation: "set", value: "same-origin" }
+            { header: "sec-fetch-dest", operation: "set", value: "empty" },
+            { header: "sec-fetch-mode", operation: "set", value: "cors" },
+            { header: "sec-fetch-site", operation: "set", value: "same-origin" }
         ]);
     }
 
@@ -355,8 +355,8 @@ class XsNetworkParser extends Parser {
                     && (currentParsed.chapterId === nextParsed.chapterId)
                     && (nextParsed.page > currentParsed.page)) {
                     return resolvedUrl;
-                    }
-                    continue;
+                }
+                continue;
             }
             let normalizedResolved = util.normalizeUrlForCompare(resolvedUrl);
             if (knownChapters.has(normalizedResolved) || (normalizedResolved === normalizedToc)) {
@@ -566,12 +566,12 @@ class XsNetworkParser extends Parser {
             return "";
         }
         return text
-        .replace(/作者[^\r\n。！？]{1,30}携《[^\r\n》]{1,60}》在[^\r\n。！？]{1,30}等你[。！!]?/g, "")
-        .replace(/强力安利《[^\r\n》]{1,60}》[！!]?(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*直达精彩[。！!]?/gi, "")
-        .replace(/偏爱[^\r\n？?]{1,20}[？?]点击(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*进入专属书库[。！!]?/gi, "")
-        .split(/\r?\n/)
-        .filter(line => !this.isJunkPromoLine(line))
-        .join("\n");
+            .replace(/作者[^\r\n。！？]{1,30}携《[^\r\n》]{1,60}》在[^\r\n。！？]{1,30}等你[。！!]?/g, "")
+            .replace(/强力安利《[^\r\n》]{1,60}》[！!]?(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*直达精彩[。！!]?/gi, "")
+            .replace(/偏爱[^\r\n？?]{1,20}[？?]点击(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*进入专属书库[。！!]?/gi, "")
+            .split(/\r?\n/)
+            .filter(line => !this.isJunkPromoLine(line))
+            .join("\n");
     }
 
     isJunkPromoLine(line) {
@@ -620,7 +620,7 @@ class XsNetworkParser extends Parser {
                 && (typeof parsed === "object")
                 && Object.prototype.hasOwnProperty.call(parsed, "code")) {
                 return parsed;
-                }
+            }
         } catch {
             return null;
         }
@@ -641,14 +641,14 @@ class XsNetworkParser extends Parser {
         if ((this.findContent(dom) != null)
             || (dom.querySelector(".chapListBody, .direList.chapter_list, .bookDetail") != null)) {
             return false;
-            }
-            if (dom.querySelector("#challenge-form, #cf-challenge-running, .cf-browser-verification, script[src*='/cdn-cgi/challenge-platform/'], #anubis_version, .cf-turnstile, .g-recaptcha, .h-captcha, .geetest_holder") != null) {
-                return true;
-            }
-            if (dom.querySelector("img[src*='captcha'], input[name*='captcha'], input[placeholder*='验证码']") != null) {
-                return true;
-            }
-            let text = dom.documentElement?.textContent || "";
+        }
+        if (dom.querySelector("#challenge-form, #cf-challenge-running, .cf-browser-verification, script[src*='/cdn-cgi/challenge-platform/'], #anubis_version, .cf-turnstile, .g-recaptcha, .h-captcha, .geetest_holder") != null) {
+            return true;
+        }
+        if (dom.querySelector("img[src*='captcha'], input[name*='captcha'], input[placeholder*='验证码']") != null) {
+            return true;
+        }
+        let text = dom.documentElement?.textContent || "";
         return /_cf_chl_opt|Just a moment\.\.\.|人机验证|安全验证|请完成验证|滑动验证|输入验证码/i.test(text);
     }
 
@@ -660,8 +660,8 @@ class XsNetworkParser extends Parser {
             || this.isJsResponse(response)
             || this.isTocApiUrl(response.response?.url)) {
             return false;
-            }
-            return (this.findContent(response.responseXML) == null)
+        }
+        return (this.findContent(response.responseXML) == null)
             && (response.responseXML.querySelector(".chapListBody, .direList.chapter_list") == null);
     }
 
@@ -738,17 +738,17 @@ class XsNetworkParser extends Parser {
         let category = dom.querySelector("meta[property='og:novel:category']")?.getAttribute("content")?.trim()
         || dom.querySelector(".bookDetail .tit .name")?.textContent?.trim();
         let tags = [...dom.querySelectorAll(".bookDetail .introM .labels span")]
-        .map(e => e.textContent.trim())
-        .filter(Boolean);
+            .map(e => e.textContent.trim())
+            .filter(Boolean);
         if (tags.length === 0) {
             let keyEl = dom.querySelector(".bookDetail .key");
             if (keyEl != null) {
                 let clone = keyEl.cloneNode(true);
                 util.removeChildElementsMatchingSelector(clone, "a");
                 let keyText = clone.textContent
-                .replace(/推荐[:：][\s\S]*$/, "")
-                .replace(/^关键字[:：]\s*/, "")
-                .trim();
+                    .replace(/推荐[:：][\s\S]*$/, "")
+                    .replace(/^关键字[:：]\s*/, "")
+                    .trim();
                 tags = keyText.split(/[、,，\s]+/).filter(Boolean);
             }
         }
@@ -808,19 +808,19 @@ class XsNetworkParser extends Parser {
             return "";
         }
         let cleaned = title
-        .replace(/\s*[（(]\s*(?:第\s*)?\d+\s*\/\s*\d+\s*(?:页\s*)?[）)]/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
+            .replace(/\s*[（(]\s*(?:第\s*)?\d+\s*\/\s*\d+\s*(?:页\s*)?[）)]/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
         return this.convertChineseChapterNumbers(cleaned);
     }
 
     convertChineseChapterNumbers(title) {
         return title.replace(
             /第([零〇一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟萬]+)章/g,
-                             (match, numeral) => {
-                                 let num = this.chineseNumeralToNumber(numeral);
-                                 return (num !== null) ? ("第" + num + "章") : match;
-                             }
+            (match, numeral) => {
+                let num = this.chineseNumeralToNumber(numeral);
+                return (num !== null) ? ("第" + num + "章") : match;
+            }
         );
     }
 
@@ -923,8 +923,8 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         if (((url || "").includes("action=loadChapterPage") || (url || "").endsWith(".js"))
             && this.parser?.tocURL) {
             return this.parser.tocURL;
-            }
-            return url;
+        }
+        return url;
     }
 
     onFetchError(url, error) {
@@ -937,26 +937,26 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
             || util.getSleepController().signal.aborted
             || (this.wrapOptions == null)) {
             return super.onFetchError(url, error);
-            }
+        }
 
-            if (this.wrapOptions.fetchRetry === undefined) {
-                this.wrapOptions.fetchRetry = { retryDelay: [15, 10, 5] };
-                return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
-            }
+        if (this.wrapOptions.fetchRetry === undefined) {
+            this.wrapOptions.fetchRetry = { retryDelay: [15, 10, 5] };
+            return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
+        }
 
-            if (0 < this.wrapOptions.fetchRetry.retryDelay.length) {
-                return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
-            }
+        if (0 < this.wrapOptions.fetchRetry.retryDelay.length) {
+            return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
+        }
 
-            let failError = new Error(this.makeFailMessage(url, error.message));
-            let msg = new Error(this.makeFailCanRetryMessage(url, error.message));
-            return this.promptUserForNetworkRetry(url, this.wrapOptions, failError, msg);
+        let failError = new Error(this.makeFailMessage(url, error.message));
+        let msg = new Error(this.makeFailCanRetryMessage(url, error.message));
+        return this.promptUserForNetworkRetry(url, this.wrapOptions, failError, msg);
     }
 
     onResponseError(url, wrapOptions, response, errorMessage) {
         let failError = errorMessage
-        ? new Error(errorMessage)
-        : new Error(this.makeFailMessage(response.url, response.status));
+            ? new Error(errorMessage)
+            : new Error(this.makeFailMessage(response.url, response.status));
 
         if (util.getSleepController().signal.aborted) {
             wrapOptions.skipFetchRetry = true;
@@ -972,26 +972,26 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         if ((wrapOptions.retry === undefined)
             || ((response.status === 403) && (wrapOptions.retry.HTTP !== 403))) {
             wrapOptions.retry = retry;
-        return this.retryFetchWithState(url, wrapOptions, wrapOptions.retry);
-            }
+            return this.retryFetchWithState(url, wrapOptions, wrapOptions.retry);
+        }
 
-            if (0 < wrapOptions.retry.retryDelay.length) {
-                return this.retryFetchWithState(url, wrapOptions, wrapOptions.retry);
-            }
+        if (0 < wrapOptions.retry.retryDelay.length) {
+            return this.retryFetchWithState(url, wrapOptions, wrapOptions.retry);
+        }
 
-            if (wrapOptions.retry.promptUser) {
-                let effectiveResponse = {
-                    url: this.getOpenUrl(response.url || url),
-                    status: response.status
-                };
-                return this.promptUserForRetry(url, wrapOptions, effectiveResponse, failError)
+        if (wrapOptions.retry.promptUser) {
+            let effectiveResponse = {
+                url: this.getOpenUrl(response.url || url),
+                status: response.status
+            };
+            return this.promptUserForRetry(url, wrapOptions, effectiveResponse, failError)
                 .catch(err => {
                     wrapOptions.skipFetchRetry = true;
                     throw err;
                 });
-            }
-            wrapOptions.skipFetchRetry = true;
-            return Promise.reject(failError);
+        }
+        wrapOptions.skipFetchRetry = true;
+        return Promise.reject(failError);
     }
 
     getRetryBehaviour(response) {

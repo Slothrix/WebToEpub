@@ -1189,7 +1189,7 @@ class UureadTwRuntime {
 
     makeFunction(fnNode, closureEnv) {
         const self = this;
-        const wrapper = function (...args) {
+        const wrapper = function(...args) {
             self.tick();
             let fnEnv = {
                 parent: closureEnv,

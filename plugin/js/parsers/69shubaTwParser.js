@@ -41,8 +41,8 @@ class _69shubaTwParser extends Parser {
                 pageChapters = firstDecoded.chapters;
             } else {
                 let pagePath = page === 1
-                ? firstDecoded.page1Path
-                : (firstDecoded.pagePrefix + String(page) + firstDecoded.pageSuffix);
+                    ? firstDecoded.page1Path
+                    : (firstDecoded.pagePrefix + String(page) + firstDecoded.pageSuffix);
                 if (!pagePath) {
                     continue;
                 }
@@ -243,8 +243,8 @@ class _69shubaTwParser extends Parser {
         let title = dom.querySelector("#nr_title");
         if (title) {
             title.textContent = title.textContent
-            .replace(/\s*[（(]\s*\d+\s*\/\s*\d+\s*[）)]\s*$/, "")
-            .trim();
+                .replace(/\s*[（(]\s*\d+\s*\/\s*\d+\s*[）)]\s*$/, "")
+                .trim();
         }
         return title;
     }
@@ -641,8 +641,8 @@ class SixNineShubaTwParserCore {
             let init = null;
             if (!this.isPunc(";")) {
                 init = (this.isKw("var") || this.isKw("let") || this.isKw("const"))
-                ? this.parseVarDecl(false)
-                : this.parseExpr();
+                    ? this.parseVarDecl(false)
+                    : this.parseExpr();
             }
             this.expectPunc(";");
             let test = this.isPunc(";") ? null : this.parseExpr();
@@ -676,8 +676,8 @@ class SixNineShubaTwParserCore {
         if (this.isKw("return")) {
             this.next();
             let value = (this.isPunc(";") || this.isPunc("}") || this.peek().type === "eof")
-            ? null
-            : this.parseExpr();
+                ? null
+                : this.parseExpr();
             this.eatPunc(";");
             return { type: "Return", value };
         }
@@ -1111,7 +1111,7 @@ class SixNineShubaTwRuntime {
 
     makeFunction(fnNode, closureEnv) {
         const self = this;
-        const wrapper = function (...args) {
+        const wrapper = function(...args) {
             self.tick();
             let fnEnv = {
                 parent: closureEnv,
@@ -1135,8 +1135,8 @@ class SixNineShubaTwRuntime {
 
     evalBlock(blockNode, env, reuseEnv = false) {
         let blockEnv = reuseEnv
-        ? env
-        : { parent: env, vars: Object.create(null), fnScope: env.fnScope };
+            ? env
+            : { parent: env, vars: Object.create(null), fnScope: env.fnScope };
         for (let stmt of blockNode.body) {
             let res = this.evalStmt(stmt, blockEnv);
             if (res) {
@@ -1350,118 +1350,118 @@ class SixNineShubaTwRuntime {
                     default: throw new Error(`Unsupported unary op: ${node.op}`);
                 }
             }
-                    case "Update": {
-                        let delta = node.op === "++" ? 1 : -1;
-                        if (node.arg.type === "Id") {
-                            let found = this.findVarEnv(env, node.arg.name);
-                            if (!found) {
-                                throw new ReferenceError(`${node.arg.name} is not defined`);
-                            }
-                            let cur = Number(found.vars[node.arg.name]);
-                            let next = cur + delta;
-                            found.vars[node.arg.name] = next;
-                            return node.prefix ? next : cur;
-                        }
-                        if (node.arg.type === "Member") {
-                            let obj = this.evalExpr(node.arg.obj, env);
-                            let prop = node.arg.computed ? this.evalExpr(node.arg.prop, env) : node.arg.prop;
-                            let cur = Number(this.readProp(obj, prop));
-                            let next = cur + delta;
-                            this.writeProp(obj, prop, next);
-                            return node.prefix ? next : cur;
-                        }
-                        throw new Error("Invalid update target");
+            case "Update": {
+                let delta = node.op === "++" ? 1 : -1;
+                if (node.arg.type === "Id") {
+                    let found = this.findVarEnv(env, node.arg.name);
+                    if (!found) {
+                        throw new ReferenceError(`${node.arg.name} is not defined`);
                     }
-                    case "Assign": {
-                        if (node.left.type === "Id") {
-                            let found = this.findVarEnv(env, node.left.name);
-                            let targetVars = found ? found.vars : env.fnScope.vars;
-                            let val = this.evalExpr(node.right, env);
-                            if (node.op === "=") {
-                                targetVars[node.left.name] = val;
-                                return val;
-                            }
-                            let next = this.applyCompound(node.op, targetVars[node.left.name], val);
-                            targetVars[node.left.name] = next;
-                            return next;
-                        }
-                        if (node.left.type === "Member") {
-                            let obj = this.evalExpr(node.left.obj, env);
-                            let prop = node.left.computed ? this.evalExpr(node.left.prop, env) : node.left.prop;
-                            let val = this.evalExpr(node.right, env);
-                            if (node.op === "=") {
-                                return this.writeProp(obj, prop, val);
-                            }
-                            let cur = this.readProp(obj, prop);
-                            let next = this.applyCompound(node.op, cur, val);
-                            return this.writeProp(obj, prop, next);
-                        }
-                        throw new Error("Invalid assignment target");
+                    let cur = Number(found.vars[node.arg.name]);
+                    let next = cur + delta;
+                    found.vars[node.arg.name] = next;
+                    return node.prefix ? next : cur;
+                }
+                if (node.arg.type === "Member") {
+                    let obj = this.evalExpr(node.arg.obj, env);
+                    let prop = node.arg.computed ? this.evalExpr(node.arg.prop, env) : node.arg.prop;
+                    let cur = Number(this.readProp(obj, prop));
+                    let next = cur + delta;
+                    this.writeProp(obj, prop, next);
+                    return node.prefix ? next : cur;
+                }
+                throw new Error("Invalid update target");
+            }
+            case "Assign": {
+                if (node.left.type === "Id") {
+                    let found = this.findVarEnv(env, node.left.name);
+                    let targetVars = found ? found.vars : env.fnScope.vars;
+                    let val = this.evalExpr(node.right, env);
+                    if (node.op === "=") {
+                        targetVars[node.left.name] = val;
+                        return val;
                     }
-                    case "Binary": {
-                        if (node.op === "&&") {
-                            let l = this.evalExpr(node.left, env);
-                            return l ? this.evalExpr(node.right, env) : l;
-                        }
-                        if (node.op === "||") {
-                            let l = this.evalExpr(node.left, env);
-                            return l ? l : this.evalExpr(node.right, env);
-                        }
-                        let l = this.evalExpr(node.left, env);
-                        let r = this.evalExpr(node.right, env);
-                        switch (node.op) {
-                            case "+": return l + r;
-                            case "-": return l - r;
-                            case "*": return l * r;
-                            case "/": return l / r;
-                            case "%": return l % r;
-                            case "<<": return l << r;
-                            case ">>": return l >> r;
-                            case ">>>": return l >>> r;
-                            case "<": return l < r;
-                            case "<=": return l <= r;
-                            case ">": return l > r;
-                            case ">=": return l >= r;
-                            case "==": return l == r; // eslint-disable-line eqeqeq
-                            case "!=": return l != r; // eslint-disable-line eqeqeq
-                            case "===": return l === r;
-                            case "!==": return l !== r;
-                            case "&": return l & r;
-                            case "^": return l ^ r;
-                            case "|": return l | r;
-                            default: throw new Error(`Unsupported binary op: ${node.op}`);
-                        }
+                    let next = this.applyCompound(node.op, targetVars[node.left.name], val);
+                    targetVars[node.left.name] = next;
+                    return next;
+                }
+                if (node.left.type === "Member") {
+                    let obj = this.evalExpr(node.left.obj, env);
+                    let prop = node.left.computed ? this.evalExpr(node.left.prop, env) : node.left.prop;
+                    let val = this.evalExpr(node.right, env);
+                    if (node.op === "=") {
+                        return this.writeProp(obj, prop, val);
                     }
-                            case "Cond":
-                                return this.evalExpr(node.test, env)
-                                ? this.evalExpr(node.consequent, env)
-                                : this.evalExpr(node.alternate, env);
-                            case "New": {
-                                let ctor = this.evalExpr(node.callee, env);
-                                if (!this.allowedCtors.has(ctor)) {
-                                    throw new Error("Constructor not allowed in decoder.");
-                                }
-                                let args = node.args.map(a => this.evalExpr(a, env));
-                                return new ctor(...args);
-                            }
-                            case "Call": {
-                                let target = undefined;
-                                let fn;
-                                let methodName = null;
-                                if (node.callee.type === "Member") {
-                                    target = this.evalExpr(node.callee.obj, env);
-                                    methodName = node.callee.computed
-                                    ? String(this.evalExpr(node.callee.prop, env))
-                                    : node.callee.prop;
-                                    fn = this.readProp(target, methodName);
-                                } else {
-                                    fn = this.evalExpr(node.callee, env);
-                                }
-                                let args = node.args.map(a => this.evalExpr(a, env));
-                                if (typeof fn !== "function") {
-                                    throw new TypeError("Attempted to call a non-function.");
-                                }
-                                let allowed = this.interpretedFns.has(fn)
+                    let cur = this.readProp(obj, prop);
+                    let next = this.applyCompound(node.op, cur, val);
+                    return this.writeProp(obj, prop, next);
+                }
+                throw new Error("Invalid assignment target");
+            }
+            case "Binary": {
+                if (node.op === "&&") {
+                    let l = this.evalExpr(node.left, env);
+                    return l ? this.evalExpr(node.right, env) : l;
+                }
+                if (node.op === "||") {
+                    let l = this.evalExpr(node.left, env);
+                    return l ? l : this.evalExpr(node.right, env);
+                }
+                let l = this.evalExpr(node.left, env);
+                let r = this.evalExpr(node.right, env);
+                switch (node.op) {
+                    case "+": return l + r;
+                    case "-": return l - r;
+                    case "*": return l * r;
+                    case "/": return l / r;
+                    case "%": return l % r;
+                    case "<<": return l << r;
+                    case ">>": return l >> r;
+                    case ">>>": return l >>> r;
+                    case "<": return l < r;
+                    case "<=": return l <= r;
+                    case ">": return l > r;
+                    case ">=": return l >= r;
+                    case "==": return l == r; // eslint-disable-line eqeqeq
+                    case "!=": return l != r; // eslint-disable-line eqeqeq
+                    case "===": return l === r;
+                    case "!==": return l !== r;
+                    case "&": return l & r;
+                    case "^": return l ^ r;
+                    case "|": return l | r;
+                    default: throw new Error(`Unsupported binary op: ${node.op}`);
+                }
+            }
+            case "Cond":
+                return this.evalExpr(node.test, env)
+                    ? this.evalExpr(node.consequent, env)
+                    : this.evalExpr(node.alternate, env);
+            case "New": {
+                let ctor = this.evalExpr(node.callee, env);
+                if (!this.allowedCtors.has(ctor)) {
+                    throw new Error("Constructor not allowed in decoder.");
+                }
+                let args = node.args.map(a => this.evalExpr(a, env));
+                return new ctor(...args);
+            }
+            case "Call": {
+                let target = undefined;
+                let fn;
+                let methodName = null;
+                if (node.callee.type === "Member") {
+                    target = this.evalExpr(node.callee.obj, env);
+                    methodName = node.callee.computed
+                        ? String(this.evalExpr(node.callee.prop, env))
+                        : node.callee.prop;
+                    fn = this.readProp(target, methodName);
+                } else {
+                    fn = this.evalExpr(node.callee, env);
+                }
+                let args = node.args.map(a => this.evalExpr(a, env));
+                if (typeof fn !== "function") {
+                    throw new TypeError("Attempted to call a non-function.");
+                }
+                let allowed = this.interpretedFns.has(fn)
                                 || this.allowedCallables.has(fn)
                                 || (methodName != null
                                 && this.allowedMethods.has(methodName)
@@ -1469,13 +1469,13 @@ class SixNineShubaTwRuntime {
                                 || Array.isArray(target)
                                 || ArrayBuffer.isView(target)
                                 || target instanceof TextDecoder));
-                                if (!allowed) {
-                                    throw new Error(`Call to '${methodName || "function"}' is not allowed.`);
-                                }
-                                return fn.apply(target, args);
-                            }
-                            default:
-                                throw new Error(`Unsupported expression: ${node.type}`);
+                if (!allowed) {
+                    throw new Error(`Call to '${methodName || "function"}' is not allowed.`);
+                }
+                return fn.apply(target, args);
+            }
+            default:
+                throw new Error(`Unsupported expression: ${node.type}`);
         }
     }
 }
