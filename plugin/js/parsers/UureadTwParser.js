@@ -14,11 +14,12 @@ class UureadTwParser extends Parser {
         this.tocURL = bookUrl;
         let tocDom = dom;
 
-        let decoded = UureadTwDecoder.extractAndRun(tocDom, "ul.dirlist");
+        let tocSelector = "div.index-body, div.newzjlist, ul.dirlist";
+        let decoded = UureadTwDecoder.extractAndRun(tocDom, tocSelector);
         if (!decoded && tocDom.querySelector("ul.dirlist span.ch-item") && util.isUrl(bookUrl)) {
             await this.setRequestHeaders(new URL("/", bookUrl).href);
             tocDom = (await HttpClient.wrapFetch(bookUrl)).responseXML;
-            decoded = UureadTwDecoder.extractAndRun(tocDom, "ul.dirlist");
+            decoded = UureadTwDecoder.extractAndRun(tocDom, tocSelector);
         }
 
         let chapters = this.decodeTocPage(tocDom, decoded);
@@ -50,18 +51,18 @@ class UureadTwParser extends Parser {
 
             let nodes = [...mainList.querySelectorAll("li :is(a, span.protected-chapter-link)")];
             return nodes
-                .map(el => {
-                    let href = el.tagName === "A" ? el.getAttribute("href") : el.dataset.cidUrl;
-                    if (!href || href.startsWith("javascript:")) {
-                        return null;
-                    }
-                    return {
-                        sourceUrl: new URL(href, baseUrl).href,
-                        title: this.cleanChapterTitle(el.textContent),
-                        newArc: null
-                    };
-                })
-                .filter(Boolean);
+            .map(el => {
+                let href = el.tagName === "A" ? el.getAttribute("href") : el.dataset.cidUrl;
+                if (!href || href.startsWith("javascript:")) {
+                    return null;
+                }
+                return {
+                    sourceUrl: new URL(href, baseUrl).href,
+                 title: this.cleanChapterTitle(el.textContent),
+                 newArc: null
+                };
+            })
+            .filter(Boolean);
         }
 
         let text = UureadTwDecoder.bytesOrStringToText(decoded.output, false);
@@ -82,175 +83,186 @@ class UureadTwParser extends Parser {
             ids = lines[3].split("\t");
         }
 
-        let items = [...decoded.targetEl.querySelectorAll("li span.ch-item")];
-        if (items.length === 0) {
-            items = [...pageDom.querySelectorAll(".newzjlist ul.dirlist li span.ch-item")];
+        let tocList = decoded.targetEl.matches("ul.dirlist")
+        ? decoded.targetEl
+        : (decoded.targetEl.querySelector("ul#newlist, ul.dirlist[id]")
+        || [...decoded.targetEl.querySelectorAll("ul.dirlist")].pop());
+        if (!tocList) {
+            let dirLists = [...pageDom.querySelectorAll(".newzjlist ul.dirlist")];
+            tocList = dirLists.find(ul => ul.id) || dirLists[dirLists.length - 1];
         }
+        let items = tocList ? [...tocList.querySelectorAll("li span.ch-item")] : [];
 
         let idxAttr = null;
         let xorKey = 0;
         let idxMatch = decoded.scriptText.match(
             /(?:function\s+[A-Za-z_$][\w$]*|[A-Za-z_$][\w$]*\s*=\s*function)\s*\([^)]*\)\s*\{[^}]*?getAttribute\s*\(\s*["'](data-[^"']+)["']\s*\)[^}]*?parseInt\s*\([^)]+\)\s*\^\s*(\d+)/
-        );
-        if (idxMatch && items.length > 0 && items[0].hasAttribute(idxMatch[1])) {
-            idxAttr = idxMatch[1];
-            xorKey = parseInt(idxMatch[2], 10);
-        }
+            );
+            if (idxMatch && items.length > 0 && items[0].hasAttribute(idxMatch[1])) {
+                idxAttr = idxMatch[1];
+                xorKey = parseInt(idxMatch[2], 10);
+            }
 
-        let chapters = [];
-        for (let i = 0; i < items.length; i++) {
-            let idx = i;
-            if (idxAttr != null) {
-                let rawIdx = items[i].getAttribute(idxAttr);
-                if (rawIdx == null) {
+            let chapters = [];
+            for (let i = 0; i < items.length; i++) {
+                let idx = i;
+                if (idxAttr != null) {
+                    let rawIdx = items[i].getAttribute(idxAttr);
+                    if (rawIdx == null) {
+                        continue;
+                    }
+                    idx = parseInt(rawIdx, 10) ^ xorKey;
+                }
+                if (idx < 0 || idx >= ids.length) {
                     continue;
                 }
-                idx = parseInt(rawIdx, 10) ^ xorKey;
-            }
-            if (idx < 0 || idx >= ids.length) {
-                continue;
-            }
-            let relUrl = prefix + String(ids[idx]) + suffix;
-            if (!relUrl.startsWith("/") || relUrl.startsWith("//")) {
-                continue;
-            }
-            chapters.push({
-                sourceUrl: new URL(relUrl, baseUrl).href,
-                title: this.cleanChapterTitle(items[i].textContent),
-                newArc: null
-            });
-        }
-
-        return chapters;
-    }
-
-    cleanChapterTitle(title) {
-        if (title == null) {
-            return "";
-        }
-        return String(title)
-            .replace(/\s*[（(]\s*(?:第\s*)?\d+\s*\/\s*\d+(?:\s*[頁页])?\s*[）)]\s*$/, "")
-            .trim();
-    }
-
-    async setRequestHeaders(refererUrl) {
-        let rules = [
-            {
-                id: 1,
-                priority: 1,
-                action: {
-                    type: "modifyHeaders",
-                    requestHeaders: [
-                        {
-                            header: "referer",
-                            operation: "set",
-                            value: refererUrl
-                        },
-                        {
-                            header: "sec-fetch-dest",
-                            operation: "set",
-                            value: "document"
-                        },
-                        {
-                            header: "sec-fetch-mode",
-                            operation: "set",
-                            value: "navigate"
-                        },
-                        {
-                            header: "sec-fetch-site",
-                            operation: "set",
-                            value: "same-origin"
-                        },
-                        {
-                            header: "origin",
-                            operation: "remove"
-                        }
-                    ]
-                },
-                condition: {
-                    urlFilter: "||uuread.tw/",
-                    resourceTypes: ["xmlhttprequest"]
+                let relUrl = prefix + String(ids[idx]) + suffix;
+                if (!relUrl.startsWith("/") || relUrl.startsWith("//")) {
+                    continue;
                 }
+                chapters.push({
+                    sourceUrl: new URL(relUrl, baseUrl).href,
+                              title: this.cleanChapterTitle(items[i].textContent),
+                              newArc: null
+                });
             }
-        ];
 
-        await HttpClient.setDeclarativeNetRequestRules(rules);
+            return chapters;
+}
+
+cleanChapterTitle(title) {
+    if (title == null) {
+        return "";
+    }
+    return String(title)
+    .replace(/\s*[（(]\s*(?:第\s*)?\d+\s*\/\s*\d+(?:\s*[頁页])?\s*[）)]\s*$/, "")
+    .trim();
+}
+
+async setRequestHeaders(refererUrl) {
+    let rules = [
+        {
+            id: 1,
+            priority: 1,
+            action: {
+                type: "modifyHeaders",
+                requestHeaders: [
+                    {
+                        header: "referer",
+                        operation: "set",
+                        value: refererUrl
+                    },
+                    {
+                        header: "sec-fetch-dest",
+                        operation: "set",
+                        value: "document"
+                    },
+                    {
+                        header: "sec-fetch-mode",
+                        operation: "set",
+                        value: "navigate"
+                    },
+                    {
+                        header: "sec-fetch-site",
+                        operation: "set",
+                        value: "same-origin"
+                    },
+                    {
+                        header: "origin",
+                        operation: "remove"
+                    }
+                ]
+            },
+            condition: {
+                urlFilter: "||uuread.tw/",
+                resourceTypes: ["xmlhttprequest"]
+            }
+        }
+    ];
+
+    await HttpClient.setDeclarativeNetRequestRules(rules);
+}
+
+async fetchSinglePage(url) {
+    if (this.userPreferences?.noContentToError403?.value) {
+        return (await HttpClient.wrapFetch(url, { parser: this })).responseXML;
+    }
+    return (await HttpClient.wrapFetch(url)).responseXML;
+}
+
+async fetchChapter(url) {
+    let refererUrl = this.tocURL || this.state?.chapterListUrl || new URL("/", url).href;
+    await this.setRequestHeaders(refererUrl);
+    let dom = await this.fetchSinglePage(url);
+    let nextUrl = this.decryptChapterContent(dom);
+    let content = this.findContent(dom);
+
+    let chapterBase = new URL(url).pathname.replace(/\.html$/i, "");
+    let visited = new Set([url]);
+    let nextPageUrl = this.getNextPageUrl(nextUrl, dom.baseURI || url, chapterBase, visited);
+    let prevPageUrl = url;
+
+    while (nextPageUrl != null) {
+        visited.add(nextPageUrl);
+        await this.waitBetweenRequests();
+        await this.setRequestHeaders(prevPageUrl);
+        let nextDom = await this.fetchSinglePage(nextPageUrl);
+        let candidateNext = this.decryptChapterContent(nextDom);
+        let nextContent = this.findContent(nextDom);
+        if (nextContent == null) {
+            throw new Error(UIText.Error.errorContentNotFound(nextPageUrl));
+        }
+        if (content != null) {
+            util.moveChildElements(nextContent, content);
+        }
+        prevPageUrl = nextPageUrl;
+        nextPageUrl = this.getNextPageUrl(candidateNext, nextDom.baseURI || nextPageUrl, chapterBase, visited);
     }
 
-    async fetchSinglePage(url) {
-        if (this.userPreferences?.noContentToError403?.value) {
-            return (await HttpClient.wrapFetch(url, { parser: this })).responseXML;
-        }
-        return (await HttpClient.wrapFetch(url)).responseXML;
-    }
+    return dom;
+}
 
-    async fetchChapter(url) {
-        let refererUrl = this.tocURL || this.state?.chapterListUrl || new URL("/", url).href;
-        await this.setRequestHeaders(refererUrl);
-        let dom = await this.fetchSinglePage(url);
-        let nextUrl = this.decryptChapterContent(dom);
-        let content = this.findContent(dom);
-
-        let chapterBase = new URL(url).pathname.replace(/\.html$/i, "");
-        let visited = new Set([url]);
-        let nextPageUrl = this.getNextPageUrl(nextUrl, dom.baseURI || url, chapterBase, visited);
-        let prevPageUrl = url;
-
-        while (nextPageUrl != null) {
-            visited.add(nextPageUrl);
-            await this.waitBetweenRequests();
-            await this.setRequestHeaders(prevPageUrl);
-            let nextDom = await this.fetchSinglePage(nextPageUrl);
-            let candidateNext = this.decryptChapterContent(nextDom);
-            let nextContent = this.findContent(nextDom);
-            if (nextContent == null) {
-                throw new Error(UIText.Error.errorContentNotFound(nextPageUrl));
-            }
-            if (content != null) {
-                util.moveChildElements(nextContent, content);
-            }
-            prevPageUrl = nextPageUrl;
-            nextPageUrl = this.getNextPageUrl(candidateNext, nextDom.baseURI || nextPageUrl, chapterBase, visited);
-        }
-
-        return dom;
-    }
-
-    getNextPageUrl(nextUrl, baseUrl, chapterBase, visited) {
-        if (!nextUrl) {
-            return null;
-        }
-        try {
-            let resolved = new URL(nextUrl, baseUrl);
-            let pagePattern = new RegExp("^" + UureadTwDecoder.escapeRegex(chapterBase) + "_\\d+\\.html$", "i");
-            if (pagePattern.test(resolved.pathname) && !visited.has(resolved.href)) {
-                return resolved.href;
-            }
-        } catch {
-            return null;
-        }
+getNextPageUrl(nextUrl, baseUrl, chapterBase, visited) {
+    if (!nextUrl) {
         return null;
     }
-
-    decryptChapterContent(dom) {
-        let decoded = UureadTwDecoder.extractAndRun(dom, "#nr");
-        if (!decoded) {
-            let nextBtn = [...dom.querySelectorAll(".operate a")]
-                .find(a => a.textContent.trim() === "下一頁");
-            let href = nextBtn?.getAttribute("href") || "";
-            return (href && !href.startsWith("javascript:")) ? href : null;
+    try {
+        let resolved = new URL(nextUrl, baseUrl);
+        let pagePattern = new RegExp("^" + UureadTwDecoder.escapeRegex(chapterBase) + "_\\d+\\.html$", "i");
+        if (pagePattern.test(resolved.pathname) && !visited.has(resolved.href)) {
+            return resolved.href;
         }
+    } catch {
+        return null;
+    }
+    return null;
+}
 
-        let jsonStr = UureadTwDecoder.bytesOrStringToText(decoded.output, true);
-        let payload = JSON.parse(jsonStr);
-        let html = "";
-        if (payload && payload.c && payload.o) {
-            for (let key of payload.o) {
-                html += payload.c[key] || "";
-            }
+decryptChapterContent(dom) {
+    let decoded = UureadTwDecoder.extractAndRun(dom, "#nr");
+    if (!decoded) {
+        let nextBtn = [...dom.querySelectorAll(".operate a")]
+        .find(a => a.textContent.trim() === "下一頁");
+        let href = nextBtn?.getAttribute("href") || "";
+        return (href && !href.startsWith("javascript:")) ? href : null;
+    }
+
+    let jsonStr = UureadTwDecoder.bytesOrStringToText(decoded.output, true);
+    let payload = JSON.parse(jsonStr);
+    let html = "";
+    if (payload && payload.c && payload.o) {
+        for (let key of payload.o) {
+            html += payload.c[key] || "";
         }
+    }
 
-        let parsed = util.sanitize(html);
+    let parsed = util.sanitize(html);
+    if (decoded.targetEl.id === "nr") {
+        decoded.targetEl.textContent = "";
+        for (let node of [...parsed.body.childNodes]) {
+            decoded.targetEl.appendChild(dom.importNode(node, true));
+        }
+    } else {
         let parent = decoded.targetEl.parentNode;
         if (parent) {
             for (let node of [...parsed.body.childNodes]) {
@@ -258,11 +270,12 @@ class UureadTwParser extends Parser {
             }
             parent.removeChild(decoded.targetEl);
         }
-
-        return payload?.n || null;
     }
 
-    customRawDomToContentStep(chapter, content) {
+    return payload?.n || null;
+}
+
+customRawDomToContentStep(chapter, content) {
         if (chapter?.title && chapter.title !== "[placeholder]") {
             chapter.title = this.cleanChapterTitle(chapter.title);
         }
@@ -273,67 +286,132 @@ class UureadTwParser extends Parser {
         }
     }
 
-    findContent(dom) {
-        return dom.querySelector("#nr");
+    convertRawDomToContent(webPage) {
+        let content = super.convertRawDomToContent(webPage);
+        this.formatContentNewlines(content);
+        return content;
     }
 
-    extractTitleImpl(dom) {
-        return dom.querySelector(".info h2")
-            || dom.querySelector("meta[property='og:title']")?.getAttribute("content");
-    }
-
-    extractAuthor(dom) {
-        let authorLabel = dom.querySelector(".info-xg a[href*='/author/']");
-        return authorLabel?.textContent?.trim()
-            || dom.querySelector("meta[property='og:novel:author']")?.getAttribute("content")?.trim()
-            || super.extractAuthor(dom);
-    }
-
-    extractLanguage() {
-        return "zh";
-    }
-
-    extractSubject(dom) {
-        let category = dom.querySelector("meta[property='og:novel:category']")?.getAttribute("content")?.trim();
-        if (category) {
-            return category;
+    formatContentNewlines(content) {
+        if (!content || content.childNodes.length === 0) {
+            return;
         }
-        return dom.querySelector(".bread li:nth-child(3) a")?.textContent?.trim() ?? "";
-    }
+        let doc = content.ownerDocument;
+        let isBlockNode = node => node?.nodeType === Node.ELEMENT_NODE && !util.isInlineElement(node);
+        let children = [...content.childNodes];
 
-    extractDescription(dom) {
-        return dom.querySelector("#bookintro")?.textContent?.trim()
-            || dom.querySelector("meta[property='og:description']")?.getAttribute("content")?.trim()
-            || "";
-    }
-
-    findChapterTitle(dom) {
-        let title = dom.querySelector("h1.chatit");
-        if (title) {
-            title.textContent = this.cleanChapterTitle(title.textContent);
+        if (isBlockNode(children[0])) {
+            content.insertBefore(doc.createTextNode("\n\n"), children[0]);
         }
-        return title;
-    }
-
-    findCoverImageUrl(dom) {
-        let src = util.getFirstImgSrc(dom, ".detail-body-body-img");
-        if (src) {
-            return src;
-        }
-        let ogImage = dom.querySelector("meta[property='og:image']")?.getAttribute("content")?.trim();
-        if (ogImage) {
-            try {
-                return new URL(ogImage, dom.baseURI || "https://www.uuread.tw/").href;
-            } catch {
-                return ogImage;
+        for (let i = 0; i < children.length - 1; i++) {
+            if (isBlockNode(children[i]) && isBlockNode(children[i + 1])) {
+                content.insertBefore(doc.createTextNode("\n\n"), children[i + 1]);
             }
         }
-        return null;
+        if (isBlockNode(children[children.length - 1])) {
+            content.appendChild(doc.createTextNode("\n\n"));
+        }
     }
 
-    removeUnwantedElementsFromContentElement(element) {
+findContent(dom) {
+    return dom.querySelector("#nr");
+}
+
+extractTitleImpl(dom) {
+    return dom.querySelector(".info h2")
+    || dom.querySelector("meta[property='og:title']")?.getAttribute("content");
+}
+
+extractAuthor(dom) {
+    let authorLabel = dom.querySelector(".info-xg a[href*='/author/']");
+    return authorLabel?.textContent?.trim()
+    || dom.querySelector("meta[property='og:novel:author']")?.getAttribute("content")?.trim()
+    || super.extractAuthor(dom);
+}
+
+extractLanguage() {
+    return "zh";
+}
+
+extractSubject(dom) {
+    let category = dom.querySelector("meta[property='og:novel:category']")?.getAttribute("content")?.trim();
+    if (category) {
+        return category;
+    }
+    return dom.querySelector(".bread li:nth-child(3) a")?.textContent?.trim() ?? "";
+}
+
+extractDescription(dom) {
+    return dom.querySelector("#bookintro")?.textContent?.trim()
+    || dom.querySelector("meta[property='og:description']")?.getAttribute("content")?.trim()
+    || "";
+}
+
+findChapterTitle(dom) {
+    let title = dom.querySelector("h1.chatit");
+    if (title) {
+        title.textContent = this.cleanChapterTitle(title.textContent);
+    }
+    return title;
+}
+
+findCoverImageUrl(dom) {
+    let src = util.getFirstImgSrc(dom, ".detail-body-body-img");
+    if (src) {
+        return src;
+    }
+    let ogImage = dom.querySelector("meta[property='og:image']")?.getAttribute("content")?.trim();
+    if (ogImage) {
+        try {
+            return new URL(ogImage, dom.baseURI || "https://www.uuread.tw/").href;
+        } catch {
+            return ogImage;
+        }
+    }
+    return null;
+}
+
+removeUnwantedElementsFromContentElement(element) {
         util.removeChildElementsMatchingSelector(element, ".txtinfo, #txtright, .bottom-ad, .bottominfo");
         super.removeUnwantedElementsFromContentElement(element);
+        util.removeEmptyDivElements(element);
+        this.cleanContentWhitespace(element);
+    }
+
+    cleanContentWhitespace(element) {
+        if (!element) {
+            return;
+        }
+        element.normalize();
+
+        for (let p of [...element.querySelectorAll("p")]) {
+            if (p.childElementCount === 0 && util.isStringWhiteSpace(p.textContent)) {
+                p.remove();
+                continue;
+            }
+            if (p.firstChild?.nodeType === Node.TEXT_NODE && /^\s/.test(p.firstChild.nodeValue)) {
+                p.firstChild.nodeValue = p.firstChild.nodeValue.replace(/^\s+/, "");
+                if (p.firstChild.nodeValue.length === 0) {
+                    p.firstChild.remove();
+                }
+            }
+            if (p.lastChild?.nodeType === Node.TEXT_NODE && /\s$/.test(p.lastChild.nodeValue)) {
+                p.lastChild.nodeValue = p.lastChild.nodeValue.replace(/\s+$/, "");
+                if (p.lastChild.nodeValue.length === 0) {
+                    p.lastChild.remove();
+                }
+            }
+        }
+
+        for (let child of [...element.childNodes]) {
+            if (child.nodeType === Node.TEXT_NODE && util.isStringWhiteSpace(child.nodeValue)) {
+                let prevIsInline = child.previousSibling != null && util.isInlineElement(child.previousSibling);
+                let nextIsInline = child.nextSibling != null && util.isInlineElement(child.nextSibling);
+                if (!prevIsInline && !nextIsInline) {
+                    child.remove();
+                }
+            }
+        }
     }
 }
 
@@ -380,21 +458,39 @@ class UureadTwDecoder {
 
     static extractAndRun(dom, containerSelector) {
         let scripts = [...dom.querySelectorAll("script:not([src])")];
-        let payloadRegex = /(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*\(?\s*[A-Za-z_$][\w$]*\.getAttribute\s*\(\s*["'](data-[^"']+)["']\s*\)(?:\s*\|\|\s*['"]{2})?\s*\)?(?:\s*\+\s*(\[[\s\S]*?\])\s*\.join\s*\(\s*['"]{2}\s*\))?/;
+        let idAssignRegex = /(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*document\.getElementById\s*\(\s*["']([^"']+)["']\s*\)/;
         let idRegex = /document\.getElementById\s*\(\s*["']([^"']+)["']\s*\)/;
+        let genericPayloadRegex = /(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*\(?\s*[A-Za-z_$][\w$]*\.getAttribute\s*\(\s*["'](data-[^"']+)["']\s*\)(?:\s*\|\|\s*['"]{2})?\s*\)?(?:\s*\+\s*(\[[\s\S]*?\])\s*\.join\s*\(\s*['"]{2}\s*\))?/;
 
         for (let script of scripts) {
             let text = script.textContent || "";
             if (!text.includes(".getAttribute(")) {
                 continue;
             }
-            let idMatch = text.match(idRegex);
-            let payloadMatch = text.match(payloadRegex);
-            if (!idMatch || !payloadMatch) {
+            let idAssignMatch = text.match(idAssignRegex);
+            let idMatch = idAssignMatch ? null : text.match(idRegex);
+            let elementId = idAssignMatch ? idAssignMatch[2] : idMatch?.[1];
+            if (!elementId) {
                 continue;
             }
 
-            let targetEl = dom.getElementById(idMatch[1]);
+            let payloadMatch = null;
+            if (idAssignMatch) {
+                let idVarEsc = UureadTwDecoder.escapeRegex(idAssignMatch[1]);
+                let boundPayloadRegex = new RegExp(
+                    "(?:var|let|const)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*\\(?\\s*" + idVarEsc
+                    + "\\.getAttribute\\s*\\(\\s*[\"'](data-[^\"']+)[\"']\\s*\\)(?:\\s*\\|\\|\\s*['\"]{2})?\\s*\\)?(?:\\s*\\+\\s*(\\[[\\s\\S]*?\\])\\s*\\.join\\s*\\(\\s*['\"]{2}\\s*\\))?"
+                );
+                payloadMatch = text.match(boundPayloadRegex);
+            }
+            if (!payloadMatch) {
+                payloadMatch = text.match(genericPayloadRegex);
+            }
+            if (!payloadMatch) {
+                continue;
+            }
+
+            let targetEl = dom.getElementById(elementId);
             if (!targetEl || !targetEl.closest(containerSelector)) {
                 continue;
             }
@@ -534,7 +630,7 @@ class UureadTwScriptEvaluator {
         const keywords = new Set([
             "var", "let", "const", "function", "return", "if", "else",
             "for", "while", "do", "break", "continue", "new", "typeof",
-            "try", "catch", "finally", "true", "false", "null", "undefined"
+            "void", "try", "catch", "finally", "true", "false", "null", "undefined"
         ]);
         const multiOps = [
             ">>>=", ">>>", "===", "!==", "<<=", ">>=",
@@ -572,6 +668,7 @@ class UureadTwScriptEvaluator {
                         i++;
                         let esc = src[i++];
                         switch (esc) {
+                            case "0": str += "\0"; break;
                             case "n": str += "\n"; break;
                             case "r": str += "\r"; break;
                             case "t": str += "\t"; break;
@@ -608,7 +705,7 @@ class UureadTwScriptEvaluator {
             if (/[0-9]/.test(ch) || (ch === "." && /[0-9]/.test(src[i + 1] || ""))) {
                 let rest = src.slice(i);
                 let numMatch = rest.match(/^0[xX][0-9a-fA-F]+/)
-                    || rest.match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/);
+                || rest.match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/);
                 let raw = numMatch[0];
                 let val = /^0[xX]/.test(raw) ? parseInt(raw, 16) : Number(raw);
                 tokens.push({ type: "number", value: val });
@@ -719,8 +816,8 @@ class UureadTwParserCore {
             let init = null;
             if (!this.isPunc(";")) {
                 init = (this.isKw("var") || this.isKw("let") || this.isKw("const"))
-                    ? this.parseVarDecl(false)
-                    : this.parseExpr();
+                ? this.parseVarDecl(false)
+                : this.parseExpr();
             }
             this.expectPunc(";");
             let test = this.isPunc(";") ? null : this.parseExpr();
@@ -754,8 +851,8 @@ class UureadTwParserCore {
         if (this.isKw("return")) {
             this.next();
             let value = (this.isPunc(";") || this.isPunc("}") || this.peek().type === "eof")
-                ? null
-                : this.parseExpr();
+            ? null
+            : this.parseExpr();
             this.eatPunc(";");
             return { type: "Return", value };
         }
@@ -924,9 +1021,9 @@ class UureadTwParserCore {
     }
 
     parseUnary() {
-        if (this.isKw("typeof")) {
-            this.next();
-            return { type: "Unary", op: "typeof", arg: this.parseUnary() };
+        if (this.isKw("typeof") || this.isKw("void")) {
+            let op = this.next().value;
+            return { type: "Unary", op, arg: this.parseUnary() };
         }
         if (this.peek().type === "punc" && ["!", "~", "+", "-"].includes(this.peek().value)) {
             let op = this.next().value;
@@ -1213,8 +1310,8 @@ class UureadTwRuntime {
 
     evalBlock(blockNode, env, reuseEnv = false) {
         let blockEnv = reuseEnv
-            ? env
-            : { parent: env, vars: Object.create(null), fnScope: env.fnScope };
+        ? env
+        : { parent: env, vars: Object.create(null), fnScope: env.fnScope };
         for (let stmt of blockNode.body) {
             let res = this.evalStmt(stmt, blockEnv);
             if (res) {
@@ -1425,135 +1522,136 @@ class UureadTwRuntime {
                     case "+": return +val;
                     case "-": return -val;
                     case "typeof": return typeof val;
+                    case "void": return undefined;
                     default: throw new Error(`Unsupported unary op: ${node.op}`);
                 }
             }
-            case "Update": {
-                let delta = node.op === "++" ? 1 : -1;
-                if (node.arg.type === "Id") {
-                    let found = this.findVarEnv(env, node.arg.name);
-                    if (!found) {
-                        throw new ReferenceError(`${node.arg.name} is not defined`);
+                    case "Update": {
+                        let delta = node.op === "++" ? 1 : -1;
+                        if (node.arg.type === "Id") {
+                            let found = this.findVarEnv(env, node.arg.name);
+                            if (!found) {
+                                throw new ReferenceError(`${node.arg.name} is not defined`);
+                            }
+                            let cur = Number(found.vars[node.arg.name]);
+                            let next = cur + delta;
+                            found.vars[node.arg.name] = next;
+                            return node.prefix ? next : cur;
+                        }
+                        if (node.arg.type === "Member") {
+                            let obj = this.evalExpr(node.arg.obj, env);
+                            let prop = node.arg.computed ? this.evalExpr(node.arg.prop, env) : node.arg.prop;
+                            let cur = Number(this.readProp(obj, prop));
+                            let next = cur + delta;
+                            this.writeProp(obj, prop, next);
+                            return node.prefix ? next : cur;
+                        }
+                        throw new Error("Invalid update target");
                     }
-                    let cur = Number(found.vars[node.arg.name]);
-                    let next = cur + delta;
-                    found.vars[node.arg.name] = next;
-                    return node.prefix ? next : cur;
-                }
-                if (node.arg.type === "Member") {
-                    let obj = this.evalExpr(node.arg.obj, env);
-                    let prop = node.arg.computed ? this.evalExpr(node.arg.prop, env) : node.arg.prop;
-                    let cur = Number(this.readProp(obj, prop));
-                    let next = cur + delta;
-                    this.writeProp(obj, prop, next);
-                    return node.prefix ? next : cur;
-                }
-                throw new Error("Invalid update target");
-            }
-            case "Assign": {
-                if (node.left.type === "Id") {
-                    let found = this.findVarEnv(env, node.left.name);
-                    let targetVars = found ? found.vars : env.fnScope.vars;
-                    let val = this.evalExpr(node.right, env);
-                    if (node.op === "=") {
-                        targetVars[node.left.name] = val;
-                        return val;
+                    case "Assign": {
+                        if (node.left.type === "Id") {
+                            let found = this.findVarEnv(env, node.left.name);
+                            let targetVars = found ? found.vars : env.fnScope.vars;
+                            let val = this.evalExpr(node.right, env);
+                            if (node.op === "=") {
+                                targetVars[node.left.name] = val;
+                                return val;
+                            }
+                            let next = this.applyCompound(node.op, targetVars[node.left.name], val);
+                            targetVars[node.left.name] = next;
+                            return next;
+                        }
+                        if (node.left.type === "Member") {
+                            let obj = this.evalExpr(node.left.obj, env);
+                            let prop = node.left.computed ? this.evalExpr(node.left.prop, env) : node.left.prop;
+                            let val = this.evalExpr(node.right, env);
+                            if (node.op === "=") {
+                                return this.writeProp(obj, prop, val);
+                            }
+                            let cur = this.readProp(obj, prop);
+                            let next = this.applyCompound(node.op, cur, val);
+                            return this.writeProp(obj, prop, next);
+                        }
+                        throw new Error("Invalid assignment target");
                     }
-                    let next = this.applyCompound(node.op, targetVars[node.left.name], val);
-                    targetVars[node.left.name] = next;
-                    return next;
-                }
-                if (node.left.type === "Member") {
-                    let obj = this.evalExpr(node.left.obj, env);
-                    let prop = node.left.computed ? this.evalExpr(node.left.prop, env) : node.left.prop;
-                    let val = this.evalExpr(node.right, env);
-                    if (node.op === "=") {
-                        return this.writeProp(obj, prop, val);
+                    case "Binary": {
+                        if (node.op === "&&") {
+                            let l = this.evalExpr(node.left, env);
+                            return l ? this.evalExpr(node.right, env) : l;
+                        }
+                        if (node.op === "||") {
+                            let l = this.evalExpr(node.left, env);
+                            return l ? l : this.evalExpr(node.right, env);
+                        }
+                        let l = this.evalExpr(node.left, env);
+                        let r = this.evalExpr(node.right, env);
+                        switch (node.op) {
+                            case "+": return l + r;
+                            case "-": return l - r;
+                            case "*": return l * r;
+                            case "/": return l / r;
+                            case "%": return l % r;
+                            case "<<": return l << r;
+                            case ">>": return l >> r;
+                            case ">>>": return l >>> r;
+                            case "<": return l < r;
+                            case "<=": return l <= r;
+                            case ">": return l > r;
+                            case ">=": return l >= r;
+                            case "==": return l == r; // eslint-disable-line eqeqeq
+                            case "!=": return l != r; // eslint-disable-line eqeqeq
+                            case "===": return l === r;
+                            case "!==": return l !== r;
+                            case "&": return l & r;
+                            case "^": return l ^ r;
+                            case "|": return l | r;
+                            default: throw new Error(`Unsupported binary op: ${node.op}`);
+                        }
                     }
-                    let cur = this.readProp(obj, prop);
-                    let next = this.applyCompound(node.op, cur, val);
-                    return this.writeProp(obj, prop, next);
-                }
-                throw new Error("Invalid assignment target");
-            }
-            case "Binary": {
-                if (node.op === "&&") {
-                    let l = this.evalExpr(node.left, env);
-                    return l ? this.evalExpr(node.right, env) : l;
-                }
-                if (node.op === "||") {
-                    let l = this.evalExpr(node.left, env);
-                    return l ? l : this.evalExpr(node.right, env);
-                }
-                let l = this.evalExpr(node.left, env);
-                let r = this.evalExpr(node.right, env);
-                switch (node.op) {
-                    case "+": return l + r;
-                    case "-": return l - r;
-                    case "*": return l * r;
-                    case "/": return l / r;
-                    case "%": return l % r;
-                    case "<<": return l << r;
-                    case ">>": return l >> r;
-                    case ">>>": return l >>> r;
-                    case "<": return l < r;
-                    case "<=": return l <= r;
-                    case ">": return l > r;
-                    case ">=": return l >= r;
-                    case "==": return l == r; // eslint-disable-line eqeqeq
-                    case "!=": return l != r; // eslint-disable-line eqeqeq
-                    case "===": return l === r;
-                    case "!==": return l !== r;
-                    case "&": return l & r;
-                    case "^": return l ^ r;
-                    case "|": return l | r;
-                    default: throw new Error(`Unsupported binary op: ${node.op}`);
-                }
-            }
-            case "Cond":
-                return this.evalExpr(node.test, env)
-                    ? this.evalExpr(node.consequent, env)
-                    : this.evalExpr(node.alternate, env);
-            case "New": {
-                let ctor = this.evalExpr(node.callee, env);
-                if (!this.allowedCtors.has(ctor)) {
-                    throw new Error("Constructor not allowed in decoder.");
-                }
-                let args = node.args.map(a => this.evalExpr(a, env));
-                return new ctor(...args);
-            }
-            case "Call": {
-                let target = undefined;
-                let fn;
-                let methodName = null;
-                if (node.callee.type === "Member") {
-                    target = this.evalExpr(node.callee.obj, env);
-                    methodName = node.callee.computed
-                        ? String(this.evalExpr(node.callee.prop, env))
-                        : node.callee.prop;
-                    fn = this.readProp(target, methodName);
-                } else {
-                    fn = this.evalExpr(node.callee, env);
-                }
-                let args = node.args.map(a => this.evalExpr(a, env));
-                if (typeof fn !== "function") {
-                    throw new TypeError("Attempted to call a non-function.");
-                }
-                let allowed = this.interpretedFns.has(fn)
-                    || this.allowedCallables.has(fn)
-                    || (methodName != null
-                        && this.allowedMethods.has(methodName)
-                        && (typeof target === "string"
-                            || Array.isArray(target)
-                            || ArrayBuffer.isView(target)
-                            || target instanceof TextDecoder));
-                if (!allowed) {
-                    throw new Error(`Call to '${methodName || "function"}' is not allowed.`);
-                }
-                return fn.apply(target, args);
-            }
-            default:
-                throw new Error(`Unsupported expression: ${node.type}`);
+                            case "Cond":
+                                return this.evalExpr(node.test, env)
+                                ? this.evalExpr(node.consequent, env)
+                                : this.evalExpr(node.alternate, env);
+                            case "New": {
+                                let ctor = this.evalExpr(node.callee, env);
+                                if (!this.allowedCtors.has(ctor)) {
+                                    throw new Error("Constructor not allowed in decoder.");
+                                }
+                                let args = node.args.map(a => this.evalExpr(a, env));
+                                return new ctor(...args);
+                            }
+                            case "Call": {
+                                let target = undefined;
+                                let fn;
+                                let methodName = null;
+                                if (node.callee.type === "Member") {
+                                    target = this.evalExpr(node.callee.obj, env);
+                                    methodName = node.callee.computed
+                                    ? String(this.evalExpr(node.callee.prop, env))
+                                    : node.callee.prop;
+                                    fn = this.readProp(target, methodName);
+                                } else {
+                                    fn = this.evalExpr(node.callee, env);
+                                }
+                                let args = node.args.map(a => this.evalExpr(a, env));
+                                if (typeof fn !== "function") {
+                                    throw new TypeError("Attempted to call a non-function.");
+                                }
+                                let allowed = this.interpretedFns.has(fn)
+                                || this.allowedCallables.has(fn)
+                                || (methodName != null
+                                && this.allowedMethods.has(methodName)
+                                && (typeof target === "string"
+                                || Array.isArray(target)
+                                || ArrayBuffer.isView(target)
+                                || target instanceof TextDecoder));
+                                if (!allowed) {
+                                    throw new Error(`Call to '${methodName || "function"}' is not allowed.`);
+                                }
+                                return fn.apply(target, args);
+                            }
+                            default:
+                                throw new Error(`Unsupported expression: ${node.type}`);
         }
     }
 }

@@ -92,8 +92,8 @@ class XsNetworkParser extends Parser {
     extractTocPageNumbers(dom) {
         let items = [...dom.querySelectorAll(".pageS .dropDown li[data-p]")];
         let pages = items.length > 0
-            ? items.map(li => parseInt(li.getAttribute("data-p"), 10))
-            : [...dom.querySelectorAll(".page2 .chapter_page select option")].map(opt => parseInt(opt.value || opt.getAttribute("value"), 10));
+        ? items.map(li => parseInt(li.getAttribute("data-p"), 10))
+        : [...dom.querySelectorAll(".page2 .chapter_page select option")].map(opt => parseInt(opt.value || opt.getAttribute("value"), 10));
         return [...new Set(pages.filter(n => !isNaN(n) && (n > 0)))].sort((a, b) => a - b);
     }
 
@@ -137,6 +137,7 @@ class XsNetworkParser extends Parser {
             secretKey: XsNetworkParser.DEFAULT_AES_KEY,
             iv: XsNetworkParser.DEFAULT_AES_IV
         };
+        let host = new URL(bookUrl).hostname;
         for (let scriptUrl of this.findCipherScriptUrls(dom, bookUrl)) {
             try {
                 await this.waitBetweenRequests();
@@ -147,7 +148,7 @@ class XsNetworkParser extends Parser {
                     { header: "sec-fetch-site", operation: "set", value: "same-origin" },
                     { header: "origin", operation: "remove" }
                 ]);
-                let response = await HttpClient.wrapFetch(scriptUrl, { errorHandler: new XsNetworkErrorHandler(this) });
+                let response = await HttpClient.wrapFetch(scriptUrl, this.makeWrapOptions());
                 if (!this.isHtmlContentType(response) && (response.arrayBuffer != null)) {
                     let scriptText = this.decodeResponseBytes(response.arrayBuffer);
                     let keyMatch = scriptText.match(/new\s+AESCrypt\s*\(\s*["']([^"']+)["']\s*\)/);
@@ -156,8 +157,13 @@ class XsNetworkParser extends Parser {
                         return { secretKey: keyMatch[1], iv: ivMatch[1] };
                     }
                 }
-            } catch {
-                // Try next script or fall back to defaults
+            } catch (err) {
+                if (err?.cancelledByUser
+                    || util.getSleepController().signal.aborted
+                    || BlockedHostNames.has(host)
+                    || HttpClient.blockedSites.has(host)) {
+                    throw err;
+                    }
             }
         }
         return fallback;
@@ -224,12 +230,12 @@ class XsNetworkParser extends Parser {
             throw new Error(json?.msg || "Failed to load chapter list page.");
         }
         return json.data
-            .filter(item => item && item.chapterurl)
-            .map(item => ({
-                sourceUrl: new URL(item.chapterurl, baseUrl).href,
-                title: this.cleanTitle(item.chaptername || ""),
-                newArc: null
-            }));
+        .filter(item => item && item.chapterurl)
+        .map(item => ({
+            sourceUrl: new URL(item.chapterurl, baseUrl).href,
+                      title: this.cleanTitle(item.chaptername || ""),
+                      newArc: null
+        }));
     }
 
     makeUrlFilter(url) {
@@ -274,9 +280,9 @@ class XsNetworkParser extends Parser {
         await this.setRequestHeaders(refererUrl, [
             { header: "referer", operation: "set", value: refererUrl },
             { header: "origin", operation: "set", value: new URL(refererUrl).origin },
-            { header: "sec-fetch-dest", operation: "set", value: "empty" },
-            { header: "sec-fetch-mode", operation: "set", value: "cors" },
-            { header: "sec-fetch-site", operation: "set", value: "same-origin" }
+                                     { header: "sec-fetch-dest", operation: "set", value: "empty" },
+                                     { header: "sec-fetch-mode", operation: "set", value: "cors" },
+                                     { header: "sec-fetch-site", operation: "set", value: "same-origin" }
         ]);
     }
 
@@ -286,7 +292,7 @@ class XsNetworkParser extends Parser {
         let dom = (await HttpClient.wrapFetch(url, this.makeWrapOptions())).responseXML;
         let mainContent = this.findContent(dom);
         if (mainContent == null) {
-            return dom;
+            throw new Error(UIText.Error.errorContentNotFound(url));
         }
         this.preparePageContent(mainContent);
 
@@ -300,7 +306,7 @@ class XsNetworkParser extends Parser {
             let nextDom = (await HttpClient.wrapFetch(nextPageUrl, this.makeWrapOptions())).responseXML;
             let nextContent = this.findContent(nextDom);
             if (nextContent == null) {
-                break;
+                throw new Error(UIText.Error.errorContentNotFound(nextPageUrl));
             }
             this.preparePageContent(nextContent);
             this.removeOverlappingLeadingElements(mainContent, nextContent);
@@ -355,8 +361,8 @@ class XsNetworkParser extends Parser {
                     && (currentParsed.chapterId === nextParsed.chapterId)
                     && (nextParsed.page > currentParsed.page)) {
                     return resolvedUrl;
-                }
-                continue;
+                    }
+                    continue;
             }
             let normalizedResolved = util.normalizeUrlForCompare(resolvedUrl);
             if (knownChapters.has(normalizedResolved) || (normalizedResolved === normalizedToc)) {
@@ -566,12 +572,12 @@ class XsNetworkParser extends Parser {
             return "";
         }
         return text
-            .replace(/作者[^\r\n。！？]{1,30}携《[^\r\n》]{1,60}》在[^\r\n。！？]{1,30}等你[。！!]?/g, "")
-            .replace(/强力安利《[^\r\n》]{1,60}》[！!]?(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*直达精彩[。！!]?/gi, "")
-            .replace(/偏爱[^\r\n？?]{1,20}[？?]点击(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*进入专属书库[。！!]?/gi, "")
-            .split(/\r?\n/)
-            .filter(line => !this.isJunkPromoLine(line))
-            .join("\n");
+        .replace(/作者[^\r\n。！？]{1,30}携《[^\r\n》]{1,60}》在[^\r\n。！？]{1,30}等你[。！!]?/g, "")
+        .replace(/强力安利《[^\r\n》]{1,60}》[！!]?(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*直达精彩[。！!]?/gi, "")
+        .replace(/偏爱[^\r\n？?]{1,20}[？?]点击(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}\S*进入专属书库[。！!]?/gi, "")
+        .split(/\r?\n/)
+        .filter(line => !this.isJunkPromoLine(line))
+        .join("\n");
     }
 
     isJunkPromoLine(line) {
@@ -599,6 +605,10 @@ class XsNetworkParser extends Parser {
         return (url || "").includes("action=loadChapterPage");
     }
 
+    isCaptchaUrl(url) {
+        return (url || "").toUpperCase().includes("/WAF/VERIFY/CAPTCHA");
+    }
+
     tryParseTocJson(response) {
         if (response == null) {
             return null;
@@ -620,49 +630,33 @@ class XsNetworkParser extends Parser {
                 && (typeof parsed === "object")
                 && Object.prototype.hasOwnProperty.call(parsed, "code")) {
                 return parsed;
-            }
+                }
         } catch {
             return null;
         }
         return null;
     }
 
-    isJsResponse(response) {
-        if (!this.isHtmlContentType(response) && (response?.arrayBuffer != null)) {
-            return (response.contentType || "").toLowerCase().includes("javascript");
-        }
-        return false;
-    }
-
     isChallengePage(dom) {
         if (dom == null) {
             return false;
         }
-        if ((this.findContent(dom) != null)
-            || (dom.querySelector(".chapListBody, .direList.chapter_list, .bookDetail") != null)) {
+        if (this.findContent(dom) != null) {
             return false;
         }
         if (dom.querySelector("#challenge-form, #cf-challenge-running, .cf-browser-verification, script[src*='/cdn-cgi/challenge-platform/'], #anubis_version, .cf-turnstile, .g-recaptcha, .h-captcha, .geetest_holder") != null) {
             return true;
         }
-        if (dom.querySelector("img[src*='captcha'], input[name*='captcha'], input[placeholder*='验证码']") != null) {
+        if ((dom.querySelector(".bookDetail") == null)
+            && (dom.querySelector("img[src*='captcha'], input[name*='captcha'], input[placeholder*='验证码']") != null)) {
             return true;
-        }
-        let text = dom.documentElement?.textContent || "";
-        return /_cf_chl_opt|Just a moment\.\.\.|人机验证|安全验证|请完成验证|滑动验证|输入验证码/i.test(text);
+            }
+            let text = dom.documentElement?.textContent || "";
+        return /_cf_chl_opt|Just a moment\.\.\.|人机验证|安全验证|请完成验证|滑动验证/i.test(text);
     }
 
-    isNoContentToError403AndContentNull(response) {
-        if (!this.userPreferences?.noContentToError403?.value
-            || !this.isHtmlContentType(response)
-            || (response?.responseXML == null)
-            || (this.tryParseTocJson(response) != null)
-            || this.isJsResponse(response)
-            || this.isTocApiUrl(response.response?.url)) {
-            return false;
-        }
-        return (this.findContent(response.responseXML) == null)
-            && (response.responseXML.querySelector(".chapListBody, .direList.chapter_list") == null);
+    isNoContentToError403AndContentNull() {
+        return false;
     }
 
     isCustomError(response) {
@@ -670,6 +664,9 @@ class XsNetworkParser extends Parser {
             return false;
         }
         let responseUrl = response.response?.url || "";
+        if (this.isCaptchaUrl(responseUrl)) {
+            return true;
+        }
         if (this.isTocApiUrl(responseUrl)) {
             let parsed = this.tryParseTocJson(response);
             return (parsed == null)
@@ -678,7 +675,10 @@ class XsNetworkParser extends Parser {
             || !Array.isArray(parsed.data);
         }
         if (this.isHtmlContentType(response) && (response.responseXML != null)) {
-            return this.isChallengePage(response.responseXML);
+            if (this.isChallengePage(response.responseXML)) {
+                return true;
+            }
+            return this.findContent(response.responseXML) == null;
         }
         return false;
     }
@@ -694,21 +694,36 @@ class XsNetworkParser extends Parser {
                 response: {
                     url: responseUrl,
                     status: 999,
-                    retryDelay: [10, 5]
+                    retryDelay: [15, 10, 5]
                 },
                 errorMessage: parsed?.msg || "Failed to load chapter list page."
             };
         }
-        if ((isApiEndpoint || responseUrl.endsWith(".js")) && this.tocURL) {
-            responseUrl = this.tocURL;
+        if (this.isCaptchaUrl(responseUrl) || this.isChallengePage(checkedresponse?.responseXML)) {
+            return {
+                url: url,
+                wrapOptions: wrapOptions,
+                response: {
+                    url: responseUrl,
+                    status: 403,
+                    retryDelay: [15, 10, 5]
+                }
+            };
         }
+        let htmlText = checkedresponse?.responseXML?.documentElement?.textContent || "";
+        let isSoft404 = /\b404\b|404\s*Not\s*Found/i.test(checkedresponse?.responseXML?.title || htmlText);
+        let status = isSoft404 ? 404 : 403;
         return {
             url: url,
             wrapOptions: wrapOptions,
             response: {
                 url: responseUrl,
-                status: 403
-            }
+                status: status,
+                retryDelay: [15, 10, 5]
+            },
+            errorMessage: isSoft404
+            ? UIText.Error.htmlFetchFailed(url, "404 Not Found")
+            : undefined
         };
     }
 
@@ -738,17 +753,17 @@ class XsNetworkParser extends Parser {
         let category = dom.querySelector("meta[property='og:novel:category']")?.getAttribute("content")?.trim()
         || dom.querySelector(".bookDetail .tit .name")?.textContent?.trim();
         let tags = [...dom.querySelectorAll(".bookDetail .introM .labels span")]
-            .map(e => e.textContent.trim())
-            .filter(Boolean);
+        .map(e => e.textContent.trim())
+        .filter(Boolean);
         if (tags.length === 0) {
             let keyEl = dom.querySelector(".bookDetail .key");
             if (keyEl != null) {
                 let clone = keyEl.cloneNode(true);
                 util.removeChildElementsMatchingSelector(clone, "a");
                 let keyText = clone.textContent
-                    .replace(/推荐[:：][\s\S]*$/, "")
-                    .replace(/^关键字[:：]\s*/, "")
-                    .trim();
+                .replace(/推荐[:：][\s\S]*$/, "")
+                .replace(/^关键字[:：]\s*/, "")
+                .trim();
                 tags = keyText.split(/[、,，\s]+/).filter(Boolean);
             }
         }
@@ -808,19 +823,19 @@ class XsNetworkParser extends Parser {
             return "";
         }
         let cleaned = title
-            .replace(/\s*[（(]\s*(?:第\s*)?\d+\s*\/\s*\d+\s*(?:页\s*)?[）)]/g, "")
-            .replace(/\s+/g, " ")
-            .trim();
+        .replace(/\s*[（(]\s*(?:第\s*)?\d+\s*\/\s*\d+\s*(?:页\s*)?[）)]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
         return this.convertChineseChapterNumbers(cleaned);
     }
 
     convertChineseChapterNumbers(title) {
         return title.replace(
             /第([零〇一二两三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟萬]+)章/g,
-            (match, numeral) => {
-                let num = this.chineseNumeralToNumber(numeral);
-                return (num !== null) ? ("第" + num + "章") : match;
-            }
+                             (match, numeral) => {
+                                 let num = this.chineseNumeralToNumber(numeral);
+                                 return (num !== null) ? ("第" + num + "章") : match;
+                             }
         );
     }
 
@@ -919,12 +934,20 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         this.wrapOptions = wrapOptions;
     }
 
-    getOpenUrl(url) {
-        if (((url || "").includes("action=loadChapterPage") || (url || "").endsWith(".js"))
+    isCaptchaUrl(url) {
+        return (url || "").toUpperCase().includes("/WAF/VERIFY/CAPTCHA");
+    }
+
+    getOpenUrl(url, responseUrl) {
+        if (this.isCaptchaUrl(responseUrl)) {
+            return responseUrl;
+        }
+        let candidate = responseUrl || url || "";
+        if ((candidate.includes("action=loadChapterPage") || candidate.endsWith(".js"))
             && this.parser?.tocURL) {
             return this.parser.tocURL;
-        }
-        return url;
+            }
+            return candidate;
     }
 
     onFetchError(url, error) {
@@ -937,26 +960,26 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
             || util.getSleepController().signal.aborted
             || (this.wrapOptions == null)) {
             return super.onFetchError(url, error);
-        }
+            }
 
-        if (this.wrapOptions.fetchRetry === undefined) {
-            this.wrapOptions.fetchRetry = { retryDelay: [15, 10, 5] };
-            return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
-        }
+            if (this.wrapOptions.fetchRetry === undefined) {
+                this.wrapOptions.fetchRetry = { retryDelay: [15, 10, 5] };
+                return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
+            }
 
-        if (0 < this.wrapOptions.fetchRetry.retryDelay.length) {
-            return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
-        }
+            if (0 < this.wrapOptions.fetchRetry.retryDelay.length) {
+                return this.retryFetchWithState(url, this.wrapOptions, this.wrapOptions.fetchRetry);
+            }
 
-        let failError = new Error(this.makeFailMessage(url, error.message));
-        let msg = new Error(this.makeFailCanRetryMessage(url, error.message));
-        return this.promptUserForNetworkRetry(url, this.wrapOptions, failError, msg);
+            let failError = new Error(this.makeFailMessage(url, error.message));
+            return this.showRetryPrompt(url, this.wrapOptions, { url: url, status: error.message }, failError);
     }
 
     onResponseError(url, wrapOptions, response, errorMessage) {
+        let responseUrl = response?.url || url;
         let failError = errorMessage
-            ? new Error(errorMessage)
-            : new Error(this.makeFailMessage(response.url, response.status));
+        ? new Error(errorMessage)
+        : new Error(this.makeFailMessage(responseUrl, response.status));
 
         if (util.getSleepController().signal.aborted) {
             wrapOptions.skipFetchRetry = true;
@@ -964,13 +987,12 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         }
 
         let retry = this.getRetryBehaviour(response);
-        if (retry.retryDelay.length === 0) {
-            wrapOptions.skipFetchRetry = true;
-            return Promise.reject(failError);
+        if (wrapOptions.retry === undefined) {
+            wrapOptions.retry = retry;
+            return this.retryFetchWithState(url, wrapOptions, wrapOptions.retry);
         }
 
-        if ((wrapOptions.retry === undefined)
-            || ((response.status === 403) && (wrapOptions.retry.HTTP !== 403))) {
+        if (((response.status === 403) || this.isCaptchaUrl(responseUrl)) && (wrapOptions.retry.HTTP !== 403)) {
             wrapOptions.retry = retry;
             return this.retryFetchWithState(url, wrapOptions, wrapOptions.retry);
         }
@@ -979,42 +1001,21 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
             return this.retryFetchWithState(url, wrapOptions, wrapOptions.retry);
         }
 
-        if (wrapOptions.retry.promptUser) {
-            let effectiveResponse = {
-                url: this.getOpenUrl(response.url || url),
-                status: response.status
-            };
-            return this.promptUserForRetry(url, wrapOptions, effectiveResponse, failError)
-                .catch(err => {
-                    wrapOptions.skipFetchRetry = true;
-                    throw err;
-                });
-        }
-        wrapOptions.skipFetchRetry = true;
-        return Promise.reject(failError);
+        return this.showRetryPrompt(url, wrapOptions, response, failError);
     }
 
     getRetryBehaviour(response) {
-        if (Array.isArray(response.retryDelay) && (response.retryDelay.length > 0)) {
-            return {
-                retryDelay: [...response.retryDelay],
-                promptUser: true
-            };
+        if (response.status === 429) {
+            FetchErrorHandler.show429Error(response);
         }
-        if ((response.status === 400) || (response.status === 404) || (response.status === 410)) {
-            return { retryDelay: [], promptUser: false };
-        }
-        let retry = FetchErrorHandler.getAutomaticRetryBehaviourForStatus(response);
-        if (retry.retryDelay.length === 0) {
-            return {
-                retryDelay: [15, 10, 5],
-                promptUser: true
-            };
-        }
+        let delays = (Array.isArray(response.retryDelay) && (response.retryDelay.length > 0))
+        ? [...response.retryDelay]
+        : [15, 10, 5];
+        let isCaptcha = (response.status === 403) || this.isCaptchaUrl(response?.url);
         return {
-            retryDelay: [...retry.retryDelay],
+            retryDelay: delays,
             promptUser: true,
-            HTTP: retry.HTTP
+            HTTP: isCaptcha ? 403 : response.status
         };
     }
 
@@ -1029,10 +1030,44 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
         return HttpClient.wrapFetchImpl(url, wrapOptions);
     }
 
-    promptUserForNetworkRetry(url, wrapOptions, failError, msg) {
+    getSafeHostname(primaryUrl, fallbackUrl) {
+        try {
+            return new URL(primaryUrl).hostname;
+        } catch {
+            return new URL(fallbackUrl).hostname;
+        }
+    }
+
+    showRetryPrompt(url, wrapOptions, response, failError) {
+        let responseUrl = response?.url || url;
+        let openUrl = this.getOpenUrl(url, responseUrl);
+        let status = response?.status;
+        let isCaptchaRedirect = this.isCaptchaUrl(responseUrl) || this.isCaptchaUrl(openUrl);
+        let isCaptcha = isCaptchaRedirect
+        || (status === 403)
+        || (wrapOptions.retry?.HTTP === 403);
+
+        let userPreferences = this.parser?.userPreferences ?? main?.getUserPreferences?.();
+        let host = this.getSafeHostname(openUrl, url);
+        let msg;
+        if (isCaptchaRedirect) {
+            msg = new Error(
+                UIText.Warning.warning403ErrorResponse(host)
+                + " (404 / CAPTCHA verification required: " + responseUrl + ") "
+                + this.makeFailCanRetryMessage(url, status)
+            );
+        } else if (isCaptcha) {
+            let warning = userPreferences?.noContentToError403?.value
+            ? UIText.Warning.warningNoContentTo403ErrorResponse(host)
+            : UIText.Warning.warning403ErrorResponse(host);
+            msg = new Error(warning + this.makeFailCanRetryMessage(url, status));
+        } else {
+            msg = new Error(this.makeFailCanRetryMessage(url, status ?? failError.message));
+        }
+
         let cancelLabel = this.getCancelButtonText();
         return new Promise((resolve, reject) => {
-            msg.openurl = this.getOpenUrl(url);
+            msg.openurl = openUrl;
             msg.blockurl = url;
             msg.retryAction = () => {
                 wrapOptions.skipFetchRetry = false;
@@ -1040,6 +1075,7 @@ class XsNetworkErrorHandler extends FetchErrorHandler {
             };
             msg.cancelAction = () => {
                 wrapOptions.skipFetchRetry = true;
+                failError.cancelledByUser = true;
                 reject(failError);
             };
             msg.cancelLabel = cancelLabel;
