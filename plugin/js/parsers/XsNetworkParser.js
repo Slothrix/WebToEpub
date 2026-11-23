@@ -579,7 +579,7 @@ class XsNetworkParser extends Parser {
         if (!trimmed) {
             return false;
         }
-        if (/^(?:[\s【\[（(]*(?:https?:\/\/)?(?:[a-z0-9-]+\.)+(?:com|net|org|cn|cc|tw|la|me|io|info|xyz|top|vip|club|co|icu|site|ink|wang|pw|tv|bz|in|pro|online|fun|ren|cx|sx|mobi|app|live|one|moe|asia|biz|shop|store|work|cloud|tech|win|ltd)(?:\/[^\s]*)?[\s】\]）)。，,!！?？,;；]*)+$/i.test(trimmed)) {
+        if (/^(?:[\s【[（(]*(?:https?:\/\/)?(?:[a-z0-9-]+\.)+(?:com|net|org|cn|cc|tw|la|me|io|info|xyz|top|vip|club|co|icu|site|ink|wang|pw|tv|bz|in|pro|online|fun|ren|cx|sx|mobi|app|live|one|moe|asia|biz|shop|store|work|cloud|tech|win|ltd)(?:\/[^\s]*)?[\s】\]）)。，,!！?？,;；]*)+$/i.test(trimmed)) {
             return true;
         }
         if (/(?:shuhaoxs|nnshushe|zhongxiaxs|yangmiaoxs|heiyaxs|nianxiaxs|klxs123)\.com/i.test(trimmed)) {
